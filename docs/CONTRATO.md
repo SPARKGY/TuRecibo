@@ -202,6 +202,53 @@ justo mientras la persona está ausente.
 `estado` viaja en **mayúsculas**: `SOLICITADA` | `APROBADA` | `RECHAZADA`. Se
 declara como campo de tipo `lista`.
 
+## Semántica de `medioDia` y `horas`
+
+Acordado con Timesheet. Es semántica de **negocio**, no descripción de cómo
+viene el dato: un consumidor que la lea al revés descuenta mal las horas.
+
+| Campo | Significado |
+|---|---|
+| `medioDia: false` | Ausencia de **jornada completa**. El día se bloquea entero |
+| `medioDia: true` | Ausencia **parcial**. La otra fracción es trabajable y cargable |
+| `horas` | Cantidad de **esa fracción**, no duración total de la ausencia |
+| `horas: null` | La magnitud **no está afirmada** por el origen |
+
+**`medioDia: true` no bloquea el día.** Tu Recibo no manda un flag suelto: manda
+el par `medio_dia` + `medio_dia_horas`. Si el flag significara "día bloqueado",
+la duración sobraría —un día entero no necesita que le digan cuántas horas
+dura—. Lo confirma el comportamiento del par: con `medio_dia: "f"`, `horas`
+viaja `null` y no `0`. Las horas solo existen cuando hay jornada partida.
+
+**`horas` no es la duración de la licencia.** Sale de `medio_dia_horas`. Una
+licencia de tres días con `horas: 4` son tres días de los cuales uno tiene una
+fracción de 4 h; no son cuatro horas de licencia. Un consumidor que la use como
+total descuenta de menos en toda licencia multi-día, y la diferencia aparece
+meses después como una discrepancia de horas sin causa visible.
+
+Cuando `horas` viene `null` y `medioDia` es `true`, el consumidor que necesite
+una magnitud tiene que elegir una convención **y dejarla explícita**: el origen
+no la está afirmando.
+
+### Ambigüedad multi-día, sin resolver
+
+Para una licencia con `desde != hasta` y `medioDia: true`, **no está definido a
+qué fecha corresponde la fracción**: primer día, último, ambos extremos o cada
+día del rango. El proveedor no lo documenta y los datos disponibles no cubren el
+caso.
+
+**El módulo no lo infiere ni lo va a inferir.** Publica el par tal como lo
+afirma el origen; inventar una regla de reparto produciría números plausibles y
+equivocados, que es el peor resultado posible acá.
+
+Decisión de Timesheet (Andrés) para ese caso: **permite cargar y marca la fila
+para revisión**, sin deducir la fecha de la fracción. Cualquier otro consumidor
+que enfrente lo mismo debería resolverlo de forma igualmente explícita.
+
+El punto puede cerrarse con evidencia —no con criterio— cuando el módulo esté
+sincronizando: mirando la distribución real de `medioDia: true` con
+`desde != hasta`.
+
 ## Dependencia abierta
 
 Ninguna en el contrato. CENTRIA lo cerró en
