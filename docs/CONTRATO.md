@@ -166,10 +166,21 @@ ausencias. Un silencio que parece un dato es peor que un error visible.
 
 ### Dos cosas que no son obvias
 
-**`version` es del esquema, no de los datos.** Se incrementa solo cuando se
-agrega, saca o renombra un campo. Si fuera un contador de corrida, cada sync
-invalidaría el parser de todos los consumidores. Para saber si hay datos nuevos
-está `actualizado`.
+**`version` es del esquema, no de los datos.** Si fuera un contador de corrida,
+cada sync invalidaría el parser de todos los consumidores. Para saber si hay
+datos nuevos está `actualizado`.
+
+Se **debe** incrementar ante cualquier cambio de forma: agregar, sacar o
+renombrar un campo, cambiar el `tipo` de uno, o cambiar la `clave` del maestro.
+CENTRIA **rechaza aprobar** una publicación que quite un campo, cambie tipo o
+clave, o baje el número, sin incremento. `version` **nunca decrece**.
+
+Detalle de implementación: `MAESTROS_VERSION` es **una sola constante para los
+tres maestros**, así que tocar uno los incrementa a todos. Es deliberado —avisar
+de más es barato, avisar de menos rompe a un consumidor en silencio— y además
+hace imposible el error de bumpear el maestro equivocado. Si algún día el ruido
+molesta, se parte en una versión por maestro; hasta entonces no vale la
+complejidad.
 
 **`bajas[]` sale solo con `?desde=`.** En una lectura completa, la ausencia de
 la fila ya es la baja; mandar además la lista de todo lo que alguna vez existió
@@ -191,7 +202,8 @@ días que no sincronizamos" se verían idénticos desde afuera.
 límite de negocio.
 
 Por eso el módulo no necesita conocer al consumidor: la política vive en la
-conexión de CENTRIA y llega ya reducida a un número.
+conexión de CENTRIA y llega ya reducida a un número. El tope lo configura el
+SUPERADMIN en la conexión como `{"ventanaDiasMax": n}`.
 
 La ventana mira `hasta`, no `desde`: una licencia larga que empezó antes del
 corte y sigue vigente tiene que publicarse. Con `desde >= corte` desaparecería

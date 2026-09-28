@@ -65,7 +65,14 @@ export type Maestro = {
  * `actualizado` para saber si hay datos nuevos, y `version` para saber si la
  * forma cambió y su parser dejó de servir. Si `version` fuera un contador de
  * corrida, cada sync invalidaría el parser de todos los consumidores.
- * Se incrementa solo cuando se agrega, se saca o se renombra un campo.
+ * Se incrementa ante cualquier cambio de forma: agregar, sacar o renombrar un
+ * campo, cambiar el `tipo` de uno, o cambiar la `clave` del maestro. CENTRIA
+ * rechaza aprobar una publicación que quite un campo o cambie tipo o clave sin
+ * incremento, y el número nunca decrece.
+ *
+ * Es una sola constante para los tres maestros: tocar uno los incrementa a
+ * todos. Avisar de más es barato; avisar de menos rompe a un consumidor en
+ * silencio.
  */
 export const MAESTROS_VERSION = 1;
 
