@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+
+    # Postgres efímero. No guarda nada: existe solo para que Prisma pueda
+    # comparar la migración versionada contra el esquema usando una base de
+    # sombra. Sin él, el drift entre `schema.prisma` y `migrations/` recién se
+    # notaría al desplegar.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sombra
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      # Antes que nada: sin el cliente generado, los tipos de Prisma no existen
+      # y el typecheck fallaría por una razón que no es la real.
+      - run: npx prisma generate
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      - name: La migración versionada coincide con el esquema
+        run: >-
+          npx prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url "postgresql://postgres:postgres@localhost:5432/sombra"
+          --exit-code
+
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

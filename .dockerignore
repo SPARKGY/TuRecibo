@@ -1,0 +1,34 @@
+# Sin esto, `COPY . .` pisa el `node_modules` que acaba de instalar `npm ci`
+# con el del host. En una máquina Windows eso mete binarios `.dll.node` en una
+# imagen Alpine y vuelve la build dependiente de quién la corre: el `npm ci` de
+# arriba queda decorativo.
+node_modules
+.next
+out
+
+.git
+.github
+.gitignore
+
+.env
+.env.*
+!.env.example
+
+# El cliente de Prisma se genera dentro de la imagen, contra el sistema de la
+# imagen. Arrastrar el generado en el host es justamente cómo entra un engine
+# para la plataforma equivocada.
+prisma/generated
+
+*.log
+npm-debug.log*
+
+.vscode
+.idea
+.DS_Store
+
+tests
+coverage
+docs
+Dockerfile
+.dockerignore
+README.md

@@ -1,0 +1,94 @@
+name: Robot de feriados
+
+# El calendario no tiene API: se raspa del panel legacy con un navegador de
+# verdad. Por eso corre acá y no dentro del App Service.
+#
+# Semanal y no diario a propósito: los feriados de un año se publican una vez y
+# casi no se mueven. Golpear el panel todos los días sería carga inútil sobre un
+# sistema que no es nuestro.
+
+on:
+  # Reactivar en G6, tras infraestructura, secretos y primera corrida manual verificada:
+  # schedule:
+  #   # Lunes 07:00 UTC ≈ 04:00 en Argentina.
+  #   - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant a actualizar."
+        required: true
+        type: string
+      anios:
+        description: "Años separados por coma. Vacío = el actual y el siguiente."
+        required: false
+        type: string
+      enviar:
+        description: "Ingestar de verdad. Sin tildar es dry-run."
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: feriados-turecibo
+  cancel-in-progress: false
+
+jobs:
+  raspar:
+    runs-on: ubuntu-latest
+    environment: produccion
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Instalar solo Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Calcular los años a cubrir
+        id: anios
+        env:
+          ANIOS: ${{ inputs.anios }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANIOS:-}" ]; then
+            echo "valor=${ANIOS}" >> "$GITHUB_OUTPUT"
+          else
+            # El año que viene importa tanto como el actual: en diciembre, un
+            # cálculo de días hábiles ya cruza el corte de año.
+            actual=$(date -u +%Y)
+            echo "valor=${actual},$((actual + 1))" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Raspar e ingestar
+        env:
+          TURECIBO_ADMIN_URL: ${{ vars.TURECIBO_ADMIN_URL }}
+          TURECIBO_USER: ${{ secrets.TURECIBO_USER }}
+          TURECIBO_PASSWORD: ${{ secrets.TURECIBO_PASSWORD }}
+          MODULO_BASE_URL: ${{ vars.MODULO_BASE_URL }}
+          FERIADOS_TOKEN: ${{ secrets.FERIADOS_TOKEN }}
+          TENANT: ${{ inputs.tenant || vars.TENANT_POR_DEFECTO }}
+          ANIOS: ${{ steps.anios.outputs.valor }}
+        run: |
+          set -euo pipefail
+          # En el cron siempre se ingesta; a mano, solo si lo pidieron. El
+          # default a dry-run está en el script: el modo que escribe se elige,
+          # no se hereda.
+          extra=""
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.enviar }}" = "true" ]; then
+            extra="--enviar"
+          fi
+          node scripts/feriados-robot.mjs --tenant "$TENANT" --anios "$ANIOS" $extra
+
+      - name: Guardar lo que vio el robot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feriados-fallido
+          path: |
+            test-results/
+          if-no-files-found: ignore
