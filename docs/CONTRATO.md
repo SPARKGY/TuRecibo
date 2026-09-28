@@ -385,10 +385,22 @@ terminada. El costo es volumen, y el volumen falla ruidoso contra el tope de
 filas con un 413; excluirla fallaría en silencio, dejando de bloquear a alguien
 que quizá sigue de licencia.
 
-**Un `regreso` anterior a `desde` no cuenta como fin.** El origen puede mandarlo
-—cada fecha se parsea por separado y nadie valida la relación entre ellas— y
-tomarlo como fin sacaba de la ventana una ausencia potencialmente abierta. Esas
-filas caen en el caso "sin fin afirmado" y se publican.
+**Un `regreso` que no es posterior a `desde` no cuenta como fin.** El origen
+puede mandarlo —cada fecha se parsea por separado y nadie valida la relación
+entre ellas— y tomarlo como fin sacaba de la ventana una ausencia potencialmente
+abierta. Esas filas caen en el caso "sin fin afirmado" y se publican.
+
+La comparación es **estricta**: `regreso == desde` describe una ausencia de cero
+días, tan imposible como una de días negativos. El motivo de partirlo ahí no es
+simetría sino **alineación con el consumidor**: Timesheet trata `regreso <=
+desde` como incoherente y cubre el día de inicio, así que si acá contara como
+fin válido, una fila así con `desde` fuera de la ventana no se publicaría y el
+consumidor perdería un día que sí habría bloqueado. Las dos puntas tienen que
+partir la coherencia en el mismo lugar.
+
+Ese borde lo reportaron CENTRIA y Timesheet como inocuo, y lo era desde cada
+lado por separado: una ausencia de cero días no bloquea nada. Deja de serlo al
+mirar las dos reglas juntas, porque no coincidían sobre qué es coherente.
 
 Ese borde lo levantó Timesheet, y el argumento que lo volvió un defecto y no una
 limitación aceptable es del lado del consumidor: **una fila que falta en una

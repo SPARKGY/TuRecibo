@@ -59,6 +59,24 @@ describe("ventana de publicación de ausencias", () => {
     expect(alcanzaLaVentana(caso("2023-01-01", null, null), CORTE)).toBe(true);
   });
 
+  it("`regreso` igual a `desde` tampoco es un fin: sería una ausencia de cero días", () => {
+    // El borde lo marcaron CENTRIA y Timesheet como inocuo. No lo es, y el
+    // motivo está del lado del consumidor: Timesheet trata `regreso <= desde`
+    // como incoherente y cubre el día de inicio. Si acá contara como fin
+    // válido, esta fila no se publicaría y el consumidor perdería un día que
+    // sí habría bloqueado. La coherencia tiene que partirse en el mismo lugar
+    // en las dos puntas.
+    expect(alcanzaLaVentana(caso("2024-01-15", null, "2024-01-15"), CORTE)).toBe(true);
+  });
+
+  it("un día de ausencia real sí es un fin válido", () => {
+    // El límite del cambio anterior: `regreso` un día después de `desde` es la
+    // ausencia más corta posible, y es coherente. Si esta prueba pasara a
+    // `true`, la comparación estricta se habría vuelto un comodín que publica
+    // toda ausencia terminada.
+    expect(alcanzaLaVentana(caso("2024-01-15", null, "2024-01-16"), CORTE)).toBe(false);
+  });
+
   it("un `regreso` anterior a `desde` no cuenta como fin, ni siquiera fuera de la ventana", () => {
     // El caso que reportó Timesheet: `desde` viejo (fuera de ventana) con un
     // `regreso` incoherente. Tratar ese valor roto como fin sacaba la fila del

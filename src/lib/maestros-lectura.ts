@@ -55,11 +55,19 @@ export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: 
  * propio `regreso` porque incluir un día de más es inocuo y excluir de menos
  * borra del feed a alguien que todavía está ausente.
  *
- * **Un `regreso` anterior a `desde` no es un fin: es un dato roto.** El origen
- * puede mandarlo porque cada fecha se parsea por separado y nadie valida la
- * relación entre ellas. Tratarlo como fin sacaría del feed una ausencia que
- * puede seguir abierta, así que se descarta y la fila cae en el caso "sin fin
- * afirmado".
+ * **Un `regreso` que no es posterior a `desde` no es un fin: es un dato roto.**
+ * El origen puede mandarlo porque cada fecha se parsea por separado y nadie
+ * valida la relación entre ellas. Tratarlo como fin sacaría del feed una
+ * ausencia que puede seguir abierta, así que se descarta y la fila cae en el
+ * caso "sin fin afirmado".
+ *
+ * La comparación es **estricta** por alineación con el consumidor, no por
+ * simetría. `regreso == desde` describe una ausencia de cero días, que es tan
+ * imposible como una de días negativos. Timesheet ya trata `regreso <= desde`
+ * como incoherente y cubre el día de inicio; si acá contara como fin válido,
+ * una fila así con `desde` fuera de la ventana no se publicaría y el consumidor
+ * perdería un día que sí habría bloqueado. Las dos puntas tienen que partir la
+ * coherencia en el mismo lugar.
  *
  * Sin un fin afirmado la ausencia **no se puede dar por terminada**, y se
  * publica siempre. Acotarla por `desde` la haría desaparecer mientras sigue
@@ -72,7 +80,7 @@ export function alcanzaLaVentana(fechas: FechasAusencia, corte: Date): boolean {
   if (fechas.desde && fechas.desde >= corte) return true;
   if (fechas.hasta) return fechas.hasta >= corte;
 
-  const regresoCoherente = fechas.regreso && (!fechas.desde || fechas.regreso >= fechas.desde);
+  const regresoCoherente = fechas.regreso && (!fechas.desde || fechas.regreso > fechas.desde);
   if (regresoCoherente) return fechas.regreso! >= corte;
 
   return true;
