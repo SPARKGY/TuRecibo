@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { alcanzaLaVentana, filtroDeVentana, type FechasAusencia } from "@/lib/maestros-lectura";
+import { alcanzaLaVentana, filtroDeVentana, iso, type FechasAusencia } from "@/lib/maestros-lectura";
+import { parseFechaTuRecibo, parseFechaISO } from "@/lib/turecibo/normalizar";
 
 const dia = (texto: string | null): Date | null => (texto ? new Date(`${texto}T00:00:00.000Z`) : null);
 
@@ -66,6 +67,20 @@ describe("ventana de publicación de ausencias", () => {
     expect(alcanzaLaVentana(caso("2025-02-20", "2025-03-01", null), CORTE)).toBe(true);
   });
 
+  it("una ausencia que empezó dentro de la ventana se publica aunque su fin declarado sea incoherente", () => {
+    // `regreso` anterior a `desde` es un dato roto que el origen puede mandar:
+    // cada fecha se parsea por separado y nadie valida la relación. Sin la red
+    // de seguridad por `desde`, esta fila se caía del feed y el consumidor
+    // dejaba de bloquear a alguien recién ausentado.
+    expect(alcanzaLaVentana(caso("2025-03-10", null, "2020-01-01"), CORTE)).toBe(true);
+  });
+
+  it("la red por `desde` no rescata a una ausencia vieja y ya terminada", () => {
+    // La red es aditiva, no un comodín: si empezó y terminó antes del corte,
+    // sigue afuera.
+    expect(alcanzaLaVentana(caso("2024-01-01", "2024-01-10", null), CORTE)).toBe(false);
+  });
+
   it("el filtro que se le manda a Prisma decide igual que la especificación", () => {
     // La regla vive en dos lados por necesidad: uno es legible y el otro es
     // ejecutable por la base. Esta prueba es lo que impide que se separen.
@@ -85,5 +100,27 @@ describe("ventana de publicación de ausencias", () => {
     }
 
     expect(comparados).toBe(fechas.length ** 3);
+  });
+});
+
+describe("el día publicado sobrevive el ida y vuelta", () => {
+  // CENTRIA marcó que `iso()` corta en UTC y que eso solo es correcto si lo
+  // guardado es medianoche UTC. Lo es, porque los dos parsers construyen con
+  // `Date.UTC` explícito. Esta prueba ata las dos puntas para que siga siendo
+  // cierto: si alguien cambia un parser a hora local, el día se corre y acá se
+  // ve, en vez de aparecer como un feriado desfasado en la pantalla de alguien.
+  it("una fecha DD/MM/YYYY vuelve como el mismo día", () => {
+    expect(iso(parseFechaTuRecibo("05/03/2025"))).toBe("2025-03-05");
+    expect(iso(parseFechaTuRecibo("01/01/2025"))).toBe("2025-01-01");
+    expect(iso(parseFechaTuRecibo("31/12/2025"))).toBe("2025-12-31");
+  });
+
+  it("una fecha YYYY-MM-DD del panel de feriados vuelve como el mismo día", () => {
+    expect(iso(parseFechaISO("2025-12-25"))).toBe("2025-12-25");
+    expect(iso(parseFechaISO("2025-01-01"))).toBe("2025-01-01");
+  });
+
+  it("un nulo sigue siendo nulo en vez de convertirse en una fecha inventada", () => {
+    expect(iso(null)).toBeNull();
   });
 });

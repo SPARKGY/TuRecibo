@@ -19,7 +19,16 @@ import type { Fila, MaestroId } from "@/lib/maestros";
 // ya venían pidiéndosela a este módulo.
 export { resolverVentana, VENTANA_POR_DEFECTO, VENTANA_MAXIMA } from "@/lib/ventana";
 
-const iso = (fecha: Date | null): string | null => (fecha ? fecha.toISOString().slice(0, 10) : null);
+/**
+ * Día ISO de una fecha guardada.
+ *
+ * Corta en UTC, que es correcto porque **todo lo que se escribe en estas
+ * columnas se construye con `Date.UTC` explícito** (`parseFechaTuRecibo` y
+ * `parseFechaISO`). Si alguna vez se escribiera una fecha en hora local, acá el
+ * día se correría uno al oeste de Greenwich. Hay una prueba de ida y vuelta que
+ * ata las dos puntas.
+ */
+export const iso = (fecha: Date | null): string | null => (fecha ? fecha.toISOString().slice(0, 10) : null);
 
 /** Lo mínimo que la ventana necesita mirar de una ausencia. */
 export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: Date | null };
@@ -46,8 +55,16 @@ export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: 
  * falla es silenciosa: el consumidor deja de bloquear y alguien carga horas
  * estando de licencia. El costo es volumen, y el volumen falla ruidoso contra
  * el tope de filas con un 413.
+ *
+ * Red de seguridad: una ausencia que **empezó** dentro de la ventana se publica
+ * aunque su fin declarado quede afuera. Cubre el caso incoherente —un `regreso`
+ * anterior a `desde`, que el origen puede mandar porque cada fecha se parsea
+ * por separado y nadie valida la relación entre ellas—. Sin esta rama, un dato
+ * roto sacaría del feed a alguien que empezó a ausentarse ayer, que es
+ * justamente el peor momento para perderlo de vista.
  */
 export function alcanzaLaVentana(fechas: FechasAusencia, corte: Date): boolean {
+  if (fechas.desde && fechas.desde >= corte) return true;
   if (fechas.hasta) return fechas.hasta >= corte;
   if (fechas.regreso) return fechas.regreso >= corte;
   return true;
@@ -103,6 +120,7 @@ async function leerFeriados(tenantId: string): Promise<Fila[]> {
  */
 export function filtroDeVentana(corte: Date) {
   return [
+    { desde: { gte: corte } },
     { hasta: { gte: corte } },
     { hasta: null, regreso: { gte: corte } },
     { hasta: null, regreso: null },
