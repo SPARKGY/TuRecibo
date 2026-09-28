@@ -39,6 +39,38 @@ el relay llegue con `x-internal-token` y `x-tenant-id`, que reenvíe
   el módulo devuelve 500 en vez de arrancar a medias — que es lo correcto, pero
   conviene no descubrirlo en ese momento.
 
+#### Verificar la imagen antes de publicarla
+
+`docker build` en verde **no prueba que la imagen sirva**. El engine de Prisma
+es un binario nativo que enlaza contra libssl al cargarse, así que una imagen
+con el engine equivocado construye perfecto, arranca, sirve la home, y recién
+muere en el primer request que toca la base.
+
+Pasó: el engine salía como `linux-musl` (libssl 1.1) sobre una Alpine con
+libssl 3, y el síntoma era `Error loading shared library libssl.so.1.1` dentro
+de un `PrismaClientInitializationError`. Está cerrado por dos lados —
+`binaryTargets` explícito en el esquema y `openssl` instalado en las dos etapas
+— pero el chequeo queda porque el modo de falla se repite con cada bump de la
+imagen base.
+
+```bash
+docker build -t turecibo:verif .
+
+# 1. El engine tiene que ser el de OpenSSL 3, no el default.
+docker run --rm --entrypoint sh turecibo:verif \
+  -c 'ls node_modules/.prisma/client/*.node'
+# Esperado: libquery_engine-linux-musl-openssl-3.0.x.so.node
+
+# 2. Y tiene que cargar de verdad. Contra una base descartable:
+docker run --rm --network <red> -e DATABASE_URL=<url> \
+  --entrypoint node turecibo:verif \
+  -e 'const {PrismaClient}=require("@prisma/client");const p=new PrismaClient();p.$connect().then(()=>{console.log("OK");process.exit(0)}).catch(e=>{console.log(e.message);process.exit(1)})'
+```
+
+El paso 2 es el que vale: el 1 puede estar bien y el binario fallar igual por
+otra dependencia. Un `Can't reach database server` es **éxito** para este
+chequeo — significa que el engine cargó y llegó a intentar la conexión.
+
 ### G3 — Base y migración
 
 ```bash

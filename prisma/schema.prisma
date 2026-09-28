@@ -15,6 +15,18 @@
 
 generator client {
   provider = "prisma-client-js"
+  // El engine se declara explícito en vez de dejarlo a la detección.
+  //
+  // Prisma elige el binario mirando la versión de OpenSSL del sistema, y si el
+  // comando `openssl` no está instalado cae al default `linux-musl`, que enlaza
+  // contra **libssl 1.1**. Las imágenes `node:20-alpine` actuales traen
+  // libssl 3, así que el cliente generado así construye una imagen perfecta que
+  // revienta en el primer `$connect` con "libssl.so.1.1: No such file".
+  //
+  // Es el peor modo de falla posible: `docker build` en verde, `npm run build`
+  // en verde, y el error recién aparece con tráfico real. Declararlo saca la
+  // decisión del entorno de build.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {

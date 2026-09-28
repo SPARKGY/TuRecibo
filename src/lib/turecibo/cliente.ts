@@ -131,13 +131,18 @@ const PAGINAS_MAXIMAS = 20;
  * corrida termina informando éxito.
  *
  * Completitud probada, en orden de preferencia:
- *   1. una página con menos filas que el tope: es la última;
+ *   1. una página con menos filas que el tope **y sin filas repetidas**: es la
+ *      última;
  *   2. `total` alcanzado, cuando el origen lo informa.
  *
  * Todo lo demás es incompleto y tira: agotar el tope de páginas con páginas
- * llenas, que el origen repita una página, o que `total` quede por encima de lo
- * acumulado. El tope sigue siendo la guarda contra un bucle infinito, pero
- * agotarlo ahora es un error y no un final silencioso.
+ * llenas, que el origen repita filas ya vistas, o que `total` quede por encima
+ * de lo acumulado. El tope sigue siendo la guarda contra un bucle infinito,
+ * pero agotarlo ahora es un error y no un final silencioso.
+ *
+ * El orden de las comprobaciones es parte del contrato de esta función: la
+ * inconsistencia se evalúa **antes** que el fin por página corta. Al revés, una
+ * última página de diez filas ya vistas se leía como final legítimo.
  */
 export async function traerLicencias(cred: Credenciales, jwt: string): Promise<LicenciaCruda[]> {
   const todas: LicenciaCruda[] = [];
@@ -165,22 +170,37 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
     // Si el origen repite la página, cortamos. Detectarlo por id evita confiar
     // en que `total` y `pagination` sean coherentes entre sí.
     let nuevas = 0;
+    let repetidas = 0;
     for (const fila of filas) {
       const id = String(fila?.id_licencia ?? "").trim();
-      if (!id || vistas.has(id)) continue;
+      if (!id) continue;
+      if (vistas.has(id)) {
+        repetidas++;
+        continue;
+      }
       vistas.add(id);
       todas.push(fila);
       nuevas++;
     }
+
+    // Una fila ya vista significa que el origen no está dando un snapshot
+    // estable: las páginas se movieron entre pedidos. No se puede saber qué
+    // quedó afuera, así que no se puede afirmar completitud.
+    //
+    // **El orden importa y es el arreglo.** Con la comprobación de página corta
+    // primero, una última página de 10 filas ya vistas se leía como "llegamos
+    // al final" y un padrón truncado salía informado como completo. Una página
+    // corta solo prueba el fin si además trae filas nuevas.
+    if (repetidas > 0) break;
+    // Página llena sin nada nuevo: el origen está repitiendo o devolviendo
+    // basura sin id. Tampoco se puede afirmar completitud.
+    if (filas.length > 0 && nuevas === 0) break;
 
     // Una página incompleta —incluida la vacía— solo puede ser la última.
     if (filas.length < LIMITE_POR_PAGINA) {
       completo = true;
       break;
     }
-    // Página llena sin nada nuevo: el origen está repitiendo. No sabemos qué
-    // falta, así que no se puede afirmar completitud.
-    if (nuevas === 0) break;
     if (total !== null && todas.length >= total) {
       completo = true;
       break;

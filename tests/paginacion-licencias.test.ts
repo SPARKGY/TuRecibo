@@ -84,6 +84,34 @@ describe("traerLicencias: completitud probada", () => {
     await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/incompleta/i);
   });
 
+  // El caso de la segunda revisión: la página final es corta **y** repetida.
+  // Con el chequeo de página corta primero, esto devolvía 5000 filas como
+  // padrón completo y la reconciliación daba de baja todo lo no leído.
+  it("una página corta de filas ya vistas no prueba el fin", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: pagina(10, 0) }]);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/incompleta/i);
+  });
+
+  // Variante mezclada: trae algo nuevo, pero también repite. Sigue siendo
+  // prueba de que el origen movió las páginas entre pedidos.
+  it("una página corta con algunas repetidas tampoco prueba el fin", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: [...pagina(5, 0), ...pagina(5, LIMITE)] }]);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/incompleta/i);
+  });
+
+  it("una página corta con filas nuevas sí prueba el fin", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: pagina(10, LIMITE) }]);
+    await expect(traerLicencias(CRED, "jwt")).resolves.toHaveLength(LIMITE + 10);
+  });
+
+  it("una página llena de filas sin id no se toma por final", async () => {
+    mockearPaginas([
+      { filas: pagina(LIMITE, 0) },
+      { filas: Array.from({ length: LIMITE }, () => ({ id_licencia: "" })) },
+    ]);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/incompleta/i);
+  });
+
   it("si el origen informa más filas de las leídas, aborta", async () => {
     mockearPaginas([{ filas: pagina(10, 0), total: 40 }]);
     await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/aborta antes de reconciliar/i);

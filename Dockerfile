@@ -7,7 +7,10 @@
 
 FROM node:20-alpine AS build
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
+# `openssl` no es opcional: sin el binario, `prisma generate` no puede detectar
+# la versión del sistema y cae al engine de libssl 1.1. El `binaryTargets` del
+# esquema ya fija cuál generar, así que esto es cinturón y tiradores.
+RUN apk add --no-cache libc6-compat openssl
 COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts
 COPY . .
@@ -20,6 +23,11 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080
+
+# El engine de Prisma es un binario nativo y enlaza contra libssl en tiempo de
+# carga. Sin esto, el proceso arranca, Next responde, y el primer request que
+# toque la base muere al instanciar el cliente.
+RUN apk add --no-cache openssl
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
