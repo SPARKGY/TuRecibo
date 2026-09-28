@@ -87,10 +87,16 @@ export const MAESTROS_VERSION = 1;
 export const LIMITE_FILAS = 50_000;
 export const LIMITE_BYTES = 10 * 1024 * 1024;
 
-const campo = (id: string, tipo: TipoCampo, sensibilidad: Sensibilidad = "comun"): CampoMaestro => ({
+const campo = (
+  id: string,
+  tipo: TipoCampo,
+  sensibilidad: Sensibilidad = "comun",
+  descripcion?: string,
+): CampoMaestro => ({
   id,
   tipo,
   sensibilidad,
+  ...(descripcion ? { descripcion } : {}),
 });
 
 export const MAESTROS: readonly Maestro[] = [
@@ -127,7 +133,11 @@ export const MAESTROS: readonly Maestro[] = [
       campo("personaExternalId", "texto"),
       campo("tipoExternalId", "texto"),
       campo("tipoNombre", "texto"),
-      campo("estado", "lista"),
+      // `texto`, no `lista`: el valor que viaja es un escalar, y `lista` haría
+      // que el relay esperara un arreglo y descartara el sobre entero con un
+      // 502. El conjunto acotado se declara en la descripción, que es
+      // informativa y no cambia la validación de forma.
+      campo("estado", "texto", "comun", "Valores: SOLICITADA | APROBADA | RECHAZADA."),
       campo("desde", "fecha"),
       campo("hasta", "fecha"),
       campo("regreso", "fecha"),
@@ -151,7 +161,8 @@ export const MAESTROS: readonly Maestro[] = [
       "correcciones manuales del módulo.",
     campos: [
       campo("fecha", "fecha"),
-      campo("tipo", "lista"),
+      // Escalar, no arreglo: ver la nota en `ausencias.estado`.
+      campo("tipo", "texto", "comun", "Tipo de feriado, escalar acotado por el origen."),
       campo("descripcion", "texto"),
       campo("desdeOverride", "booleano"),
     ],

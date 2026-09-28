@@ -82,7 +82,7 @@ agregado en v2).
       "version": 1,
       "descripcion": "...",
       "campos": [
-        { "id": "estado", "tipo": "lista", "sensibilidad": "comun" },
+        { "id": "estado", "tipo": "texto", "sensibilidad": "comun", "descripcion": "Valores: SOLICITADA | APROBADA | RECHAZADA." },
         { "id": "dni", "tipo": "texto", "sensibilidad": "restringido" }
       ],
       "parametros": [{ "id": "ventanaDias", "tipo": "numero", "min": 1, "max": 400, "default": 31 }]
@@ -96,7 +96,11 @@ que un CENTRIA que solo entienda v1 sigue leyendo el documento y se limita a
 ignorar el campo de más.
 
 - `tipo` de campo: `texto` | `numero` | `booleano` | `fecha` (AAAA-MM-DD) |
-  `fechaHora` (ISO) | `lista`.
+  `fechaHora` (ISO) | `lista`. **Este módulo no usa `lista`**: todos sus campos
+  emiten escalares, y declarar `lista` haría que el relay esperara un arreglo.
+
+Cantidad de campos publicados, fijada por prueba porque CENTRIA la verifica
+contra el manifiesto real: **`ausencias` 14**, `tipos-licencia` 4, `feriados` 4.
 - `sensibilidad`: `comun` | `sensible` | `restringido`. `dni`, `cuil` y `motivo`
   van como **restringido**.
 - `parametros` declara solo lo que **varía** entre maestros. `?campos=` y
@@ -212,7 +216,11 @@ justo mientras la persona está ausente.
 ## Estado de las ausencias
 
 `estado` viaja en **mayúsculas**: `SOLICITADA` | `APROBADA` | `RECHAZADA`. Se
-declara como campo de tipo `lista`.
+declara como campo de tipo **`texto`**, no `lista`: el valor que viaja es un
+escalar, y `lista` le diría al relay que espere un arreglo, con lo que la
+validación de forma fallaría y el sobre entero se descartaría con un 502. El
+conjunto acotado se declara en la `descripcion` del campo, que es informativa y
+no participa de la validación. Lo mismo aplica a `feriados.tipo`.
 
 ## Semántica de `medioDia` y `horas`
 
@@ -308,6 +316,68 @@ anulado**.
 Se deja escrito para desarmar el supuesto inverso: publicar una corrección **no
 garantiza** que se vea en todos los consumidores. La última palabra sobre su
 propio calendario la tiene cada uno.
+
+## Fin de una ausencia: `hasta`, `regreso` y qué significa que falten
+
+`ausencias` publica tres fechas: `desde`, `hasta` y `regreso`. Las tres pueden
+venir nulas, y **un nulo nunca se rellena**: significa que el origen no afirmó
+ese dato, no que valga otra cosa.
+
+- **`hasta` presente** — fin afirmado por el origen.
+- **`hasta: null`** — el origen **no afirmó fecha de fin**. No significa "dura un
+  día" ni "no tiene fin"; significa que el dato no está.
+- **`regreso`** — primer día de vuelta al trabajo, **exclusivo**. Es
+  independiente de `hasta` y suele venir cargado cuando `hasta` no está.
+
+De ahí la regla para un consumidor, en tres ramas:
+
+| `hasta` | `regreso` | Qué se puede afirmar |
+|---|---|---|
+| presente | — | Termina en `hasta`. |
+| null | presente | Fin **derivable**: `regreso − 1 día`. |
+| null | null | **Fin indeterminado.** No hay dato para derivarlo. |
+
+Solo la tercera rama necesita una política, y esa política es **del consumidor**,
+no del origen: el módulo no la elige por él. Lo que sí corresponde es que quede
+explícita y visible en el código que la aplica, en vez de quedar implícita en un
+comportamiento.
+
+El módulo **no rellena `hasta` con `desde`** cuando viene vacío. Hacerlo
+entregaría una fecha que nadie afirmó, indistinguible de una real, y borraría
+para siempre la diferencia entre las tres ramas de arriba.
+
+### Una baja no significa que la ausencia terminó
+
+`activa: false` significa que la fila **dejó de venir en el padrón** del origen:
+se anuló, se borró o se cayó del listado. **No** es la señal de que la persona
+volvió a trabajar.
+
+Una licencia que termina normalmente **sigue viniendo en el padrón y sigue
+`activa: true`**; lo único que cambia es que su `hasta` ya pasó. Esperar una baja
+como señal de fin de ausencia es esperar un evento que, en el caso feliz, no
+llega nunca.
+
+El camino real por el que una ausencia abierta se cierra es otro: cada corrida
+relee el padrón y reconcilia por `externalId`, así que si el origen después
+completa la fecha de fin, **la misma fila se actualiza en el lugar** —mismo
+`externalId`, `hasta` ahora presente— y `actualizado` se mueve.
+
+### La ventana de publicación mira el fin, no el inicio
+
+Consecuencia directa de lo anterior, del lado del módulo: `leerAusencias` filtra
+por el **fin efectivo** —`hasta`, y si no hay, `regreso`—, nunca por `desde`.
+Filtrar por `desde` haría desaparecer del feed una licencia larga justo mientras
+la persona está ausente.
+
+Una ausencia **sin `hasta` ni `regreso` se publica siempre**, sin importar hace
+cuánto empezó: el origen no afirmó ningún fin, así que no se la puede dar por
+terminada. El costo es volumen, y el volumen falla ruidoso contra el tope de
+filas con un 413; excluirla fallaría en silencio, dejando de bloquear a alguien
+que quizá sigue de licencia.
+
+La regla vive como función pura (`alcanzaLaVentana`) además de como `where` de
+Prisma, y hay una prueba que compara las dos decisiones caso por caso para que
+no se separen.
 
 ## Dependencia abierta
 

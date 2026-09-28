@@ -21,6 +21,38 @@ export { resolverVentana, VENTANA_POR_DEFECTO, VENTANA_MAXIMA } from "@/lib/vent
 
 const iso = (fecha: Date | null): string | null => (fecha ? fecha.toISOString().slice(0, 10) : null);
 
+/** Lo mínimo que la ventana necesita mirar de una ausencia. */
+export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: Date | null };
+
+/**
+ * ¿Esta ausencia entra en la ventana de publicación?
+ *
+ * Es la **especificación** de la regla. El `where` de Prisma de `leerAusencias`
+ * es su traducción, y hay una prueba que compara ambas caso por caso para que no
+ * puedan divergir en silencio.
+ *
+ * La ventana mira el **fin** de la ausencia, no el inicio: una licencia larga
+ * que empezó antes del corte y sigue vigente hoy tiene que publicarse. Con
+ * `desde >= corte` desaparecería justo mientras la persona está ausente.
+ *
+ * El fin efectivo es `hasta`, y si no hay, `regreso`. `regreso` es el primer día
+ * de vuelta (exclusivo), así que el fin real es el día anterior; se compara el
+ * propio `regreso` porque incluir un día de más es inocuo y excluir de menos
+ * borra del feed a alguien que todavía está ausente.
+ *
+ * Sin `hasta` ni `regreso` el origen **no afirmó ningún fin**, así que la
+ * ausencia no se puede dar por terminada y se publica siempre. Acotarla por
+ * `desde` la haría desaparecer mientras sigue potencialmente abierta, y esa
+ * falla es silenciosa: el consumidor deja de bloquear y alguien carga horas
+ * estando de licencia. El costo es volumen, y el volumen falla ruidoso contra
+ * el tope de filas con un 413.
+ */
+export function alcanzaLaVentana(fechas: FechasAusencia, corte: Date): boolean {
+  if (fechas.hasta) return fechas.hasta >= corte;
+  if (fechas.regreso) return fechas.regreso >= corte;
+  return true;
+}
+
 export async function leerFilas(
   tenantId: string,
   maestro: MaestroId,
@@ -64,6 +96,19 @@ async function leerFeriados(tenantId: string): Promise<Fila[]> {
   }));
 }
 
+/**
+ * Traducción a Prisma de `alcanzaLaVentana`. Las ramas están en el mismo orden
+ * que la función, y una prueba verifica que decidan igual sobre la misma matriz
+ * de casos.
+ */
+export function filtroDeVentana(corte: Date) {
+  return [
+    { hasta: { gte: corte } },
+    { hasta: null, regreso: { gte: corte } },
+    { hasta: null, regreso: null },
+  ];
+}
+
 async function leerAusencias(tenantId: string, opciones: { ventanaDias: number; ahora?: Date }): Promise<Fila[]> {
   const ahora = opciones.ahora ?? new Date();
   const corte = new Date(ahora.getTime() - opciones.ventanaDias * 24 * 60 * 60 * 1000);
@@ -71,11 +116,7 @@ async function leerAusencias(tenantId: string, opciones: { ventanaDias: number; 
   const filas = await prisma.ausencia.findMany({
     where: {
       tenantId,
-      // La ventana mira el fin de la ausencia, no el inicio: una licencia larga
-      // que empezó antes del corte y sigue vigente hoy tiene que publicarse. Con
-      // `desde >= corte` esa licencia desaparecería justo mientras la persona
-      // está ausente, que es cuando más importa.
-      OR: [{ hasta: { gte: corte } }, { hasta: null, desde: { gte: corte } }, { desde: null }],
+      OR: filtroDeVentana(corte),
     },
   });
 
