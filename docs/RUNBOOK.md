@@ -117,18 +117,20 @@ Verificar contra lo que hoy tiene KAiROS antes de que nadie consuma
 
 ### G6 — Cron y consumidores
 
-Recién acá se habilitan los workflows programados y se crea la conexión de
-Timesheet en CENTRIA.
+Recién acá, después de infraestructura, secretos y primera corrida manual
+verificada, se descomentan los bloques `schedule` de ambos workflows y se crea
+la conexión de Timesheet en CENTRIA. Hasta entonces solo está disponible
+`workflow_dispatch`; mergear a `main` no inicia extracciones programadas.
 
 ## Operación diaria
 
 | Qué | Cuándo | Dónde |
 |---|---|---|
-| Sync de tipos y ausencias | 06:15 UTC | `.github/workflows/sync-programado.yml` |
-| Robot de feriados | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
+| Sync de tipos y ausencias (desde G6) | 06:15 UTC | `.github/workflows/sync-programado.yml` |
+| Robot de feriados (desde G6) | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
 
 Ambos tienen `workflow_dispatch` para correr a mano. El robot es dry-run salvo
-que se tilde `enviar` (en el cron siempre ingesta).
+que se tilde `enviar` (una vez habilitado el cron, siempre ingesta).
 
 ## Cuando algo falla
 

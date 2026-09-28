@@ -8,9 +8,10 @@ name: Robot de feriados
 # sistema que no es nuestro.
 
 on:
-  schedule:
-    # Lunes 07:00 UTC ≈ 04:00 en Argentina.
-    - cron: "0 7 * * 1"
+  # Reactivar en G6, tras infraestructura, secretos y primera corrida manual verificada:
+  # schedule:
+  #   # Lunes 07:00 UTC ≈ 04:00 en Argentina.
+  #   - cron: "0 7 * * 1"
   workflow_dispatch:
     inputs:
       tenant:
