@@ -36,9 +36,15 @@ export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: 
 /**
  * ¿Esta ausencia entra en la ventana de publicación?
  *
- * Es la **especificación** de la regla. El `where` de Prisma de `leerAusencias`
- * es su traducción, y hay una prueba que compara ambas caso por caso para que no
- * puedan divergir en silencio.
+ * Es la **autoridad**: se aplica en memoria sobre lo que devuelve Prisma. El
+ * `where` de `filtroDeVentana` es solo una pre-poda que evita traer la tabla
+ * entera, y por eso tiene que ser un **superconjunto** de esta función; hay una
+ * prueba que lo verifica caso por caso.
+ *
+ * Esa división existe porque la regla necesita **comparar dos columnas entre
+ * sí** —`regreso` contra `desde`— y un `where` de Prisma no lo expresa. Hacer
+ * que la base decidiera obligaría a simplificar la regla hasta volverla
+ * incorrecta.
  *
  * La ventana mira el **fin** de la ausencia, no el inicio: una licencia larga
  * que empezó antes del corte y sigue vigente hoy tiene que publicarse. Con
@@ -49,24 +55,26 @@ export type FechasAusencia = { desde: Date | null; hasta: Date | null; regreso: 
  * propio `regreso` porque incluir un día de más es inocuo y excluir de menos
  * borra del feed a alguien que todavía está ausente.
  *
- * Sin `hasta` ni `regreso` el origen **no afirmó ningún fin**, así que la
- * ausencia no se puede dar por terminada y se publica siempre. Acotarla por
- * `desde` la haría desaparecer mientras sigue potencialmente abierta, y esa
- * falla es silenciosa: el consumidor deja de bloquear y alguien carga horas
- * estando de licencia. El costo es volumen, y el volumen falla ruidoso contra
- * el tope de filas con un 413.
+ * **Un `regreso` anterior a `desde` no es un fin: es un dato roto.** El origen
+ * puede mandarlo porque cada fecha se parsea por separado y nadie valida la
+ * relación entre ellas. Tratarlo como fin sacaría del feed una ausencia que
+ * puede seguir abierta, así que se descarta y la fila cae en el caso "sin fin
+ * afirmado".
  *
- * Red de seguridad: una ausencia que **empezó** dentro de la ventana se publica
- * aunque su fin declarado quede afuera. Cubre el caso incoherente —un `regreso`
- * anterior a `desde`, que el origen puede mandar porque cada fecha se parsea
- * por separado y nadie valida la relación entre ellas—. Sin esta rama, un dato
- * roto sacaría del feed a alguien que empezó a ausentarse ayer, que es
- * justamente el peor momento para perderlo de vista.
+ * Sin un fin afirmado la ausencia **no se puede dar por terminada**, y se
+ * publica siempre. Acotarla por `desde` la haría desaparecer mientras sigue
+ * potencialmente abierta, y esa falla es silenciosa: para el consumidor, una
+ * fila que falta en una respuesta completa es indistinguible de "no hubo
+ * ausencia". El costo de publicar de más es volumen, y el volumen falla ruidoso
+ * contra el tope de filas con un 413.
  */
 export function alcanzaLaVentana(fechas: FechasAusencia, corte: Date): boolean {
   if (fechas.desde && fechas.desde >= corte) return true;
   if (fechas.hasta) return fechas.hasta >= corte;
-  if (fechas.regreso) return fechas.regreso >= corte;
+
+  const regresoCoherente = fechas.regreso && (!fechas.desde || fechas.regreso >= fechas.desde);
+  if (regresoCoherente) return fechas.regreso! >= corte;
+
   return true;
 }
 
@@ -114,29 +122,34 @@ async function leerFeriados(tenantId: string): Promise<Fila[]> {
 }
 
 /**
- * Traducción a Prisma de `alcanzaLaVentana`. Las ramas están en el mismo orden
- * que la función, y una prueba verifica que decidan igual sobre la misma matriz
- * de casos.
+ * Pre-poda que se le manda a Prisma.
+ *
+ * **Es un superconjunto deliberado de `alcanzaLaVentana`, no su traducción.**
+ * Trae de más y deja que la función pura decida, porque la regla real compara
+ * `regreso` contra `desde` y eso no se expresa en un `where`.
+ *
+ * La rama `{ hasta: null }` es la que paga ese precio: se trae toda ausencia sin
+ * fecha de fin, sin acotar por fecha. Son pocas —una licencia cerrada tiene
+ * `hasta`— y el costo es volumen acotado contra el tope de filas, que falla
+ * ruidoso. La alternativa era acotarlas por `desde` y perder en silencio las que
+ * siguen abiertas.
  */
 export function filtroDeVentana(corte: Date) {
-  return [
-    { desde: { gte: corte } },
-    { hasta: { gte: corte } },
-    { hasta: null, regreso: { gte: corte } },
-    { hasta: null, regreso: null },
-  ];
+  return [{ desde: { gte: corte } }, { hasta: { gte: corte } }, { hasta: null }];
 }
 
 async function leerAusencias(tenantId: string, opciones: { ventanaDias: number; ahora?: Date }): Promise<Fila[]> {
   const ahora = opciones.ahora ?? new Date();
   const corte = new Date(ahora.getTime() - opciones.ventanaDias * 24 * 60 * 60 * 1000);
 
-  const filas = await prisma.ausencia.findMany({
+  const candidatas = await prisma.ausencia.findMany({
     where: {
       tenantId,
       OR: filtroDeVentana(corte),
     },
   });
+
+  const filas = candidatas.filter((f) => alcanzaLaVentana(f, corte));
 
   return filas.map((f) => ({
     clave: f.externalId,

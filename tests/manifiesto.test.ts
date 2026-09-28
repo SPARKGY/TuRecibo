@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { armarManifiesto, MANIFIESTO_VERSION } from "@/lib/manifiesto";
-import { MAESTROS, MAESTROS_VERSION } from "@/lib/maestros";
+import { MAESTROS, VERSIONES, armarRespuesta, type MaestroId } from "@/lib/maestros";
 import { VENTANA_MAXIMA, VENTANA_POR_DEFECTO } from "@/lib/ventana";
 
 const manifiesto = armarManifiesto();
@@ -67,11 +67,43 @@ describe("sección publica", () => {
     }
   });
 
-  it("expone la versión del esquema de fila, no la del documento", () => {
+  it("cada maestro expone su propia versión de esquema, no una compartida", () => {
+    // Una versión por maestro y no una global: con la compartida, subir la
+    // versión de `feriados` hacía que CENTRIA respondiera 502 también en
+    // `ausencias` y `tipos-licencia` —que no cambiaron— hasta que el SUPERADMIN
+    // aprobara las tres propuestas nuevas.
     for (const m of manifiesto.publica) {
-      expect(m.version).toBe(MAESTROS_VERSION);
+      expect(m.version, m.id).toBe(VERSIONES[m.id as MaestroId]);
+      expect(Number.isInteger(m.version), m.id).toBe(true);
+      expect(m.version, m.id).toBeGreaterThanOrEqual(1);
     }
     expect(manifiesto.manifiestoVersion).toBe(MANIFIESTO_VERSION);
+  });
+
+  it("la versión de un maestro no arrastra a los demás", () => {
+    // Fija la independencia en la estructura, para que nadie vuelva a
+    // consolidarlas en una constante sin que se note.
+    const versiones = new Map(MAESTROS.map((m) => [m.id, m.version]));
+    const subida = { ...VERSIONES, feriados: VERSIONES.feriados + 1 };
+
+    expect(subida.ausencias).toBe(versiones.get("ausencias"));
+    expect(subida["tipos-licencia"]).toBe(versiones.get("tipos-licencia"));
+    expect(subida.feriados).not.toBe(versiones.get("feriados"));
+  });
+
+  it("la respuesta publicada lleva la versión de su propio maestro", () => {
+    // El manifiesto y el sobre tienen que coincidir: el relay compara la
+    // versión del sobre contra la aprobada de ese maestro.
+    for (const m of MAESTROS) {
+      const respuesta = armarRespuesta({
+        maestro: m,
+        filas: [],
+        campos: m.campos.map((c) => c.id),
+        desde: null,
+        selloActualizado: null,
+      });
+      expect(respuesta.version, m.id).toBe(VERSIONES[m.id]);
+    }
   });
 });
 

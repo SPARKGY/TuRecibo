@@ -59,6 +59,25 @@ describe("ventana de publicación de ausencias", () => {
     expect(alcanzaLaVentana(caso("2023-01-01", null, null), CORTE)).toBe(true);
   });
 
+  it("un `regreso` anterior a `desde` no cuenta como fin, ni siquiera fuera de la ventana", () => {
+    // El caso que reportó Timesheet: `desde` viejo (fuera de ventana) con un
+    // `regreso` incoherente. Tratar ese valor roto como fin sacaba la fila del
+    // feed, y una fila ausente en una respuesta completa es indistinguible de
+    // "no hubo ausencia". Al descartarlo, cae en "sin fin afirmado" y se
+    // publica.
+    expect(alcanzaLaVentana(caso("2024-01-15", null, "2020-01-01"), CORTE)).toBe(true);
+  });
+
+  it("un `regreso` coherente sí acota, aunque `desde` sea viejo", () => {
+    // El complemento del anterior: descartar la incoherencia no puede volverse
+    // un comodín que publique todo lo que no tiene `hasta`.
+    expect(alcanzaLaVentana(caso("2024-01-15", null, "2024-02-01"), CORTE)).toBe(false);
+  });
+
+  it("sin `desde`, un `regreso` viejo se toma como fin: no hay contra qué compararlo", () => {
+    expect(alcanzaLaVentana(caso(null, null, "2024-01-01"), CORTE)).toBe(false);
+  });
+
   it("una fila sin ninguna fecha se publica en vez de desaparecer", () => {
     expect(alcanzaLaVentana(caso(null, null, null), CORTE)).toBe(true);
   });
@@ -81,25 +100,37 @@ describe("ventana de publicación de ausencias", () => {
     expect(alcanzaLaVentana(caso("2024-01-01", "2024-01-10", null), CORTE)).toBe(false);
   });
 
-  it("el filtro que se le manda a Prisma decide igual que la especificación", () => {
-    // La regla vive en dos lados por necesidad: uno es legible y el otro es
-    // ejecutable por la base. Esta prueba es lo que impide que se separen.
-    const fechas = [null, "2023-01-01", "2024-12-01", "2025-02-25", "2025-03-01", "2025-06-01"];
+  it("el filtro que se le manda a Prisma nunca descarta una fila que la regla publica", () => {
+    // La relación correcta es **superconjunto**, no igualdad: el `where` es una
+    // pre-poda y `alcanzaLaVentana` es la autoridad que se aplica después, en
+    // memoria. Lo que no puede pasar nunca es que la base descarte una fila que
+    // la regla habría publicado, porque esa fila ya no llega a evaluarse y
+    // desaparece en silencio.
+    const fechas = [null, "2020-01-01", "2024-01-15", "2024-12-01", "2025-02-25", "2025-03-01", "2025-06-01"];
 
-    let comparados = 0;
+    let publicadas = 0;
+    let traidasDeMas = 0;
     for (const desde of fechas) {
       for (const hasta of fechas) {
         for (const regreso of fechas) {
           const fila = caso(desde, hasta, regreso);
-          expect(evaluarFiltro(fila, CORTE), `desde=${desde} hasta=${hasta} regreso=${regreso}`).toBe(
-            alcanzaLaVentana(fila, CORTE),
-          );
-          comparados += 1;
+          const publica = alcanzaLaVentana(fila, CORTE);
+          const trae = evaluarFiltro(fila, CORTE);
+
+          if (publica) {
+            expect(trae, `descartada por la base: desde=${desde} hasta=${hasta} regreso=${regreso}`).toBe(true);
+            publicadas += 1;
+          } else if (trae) {
+            traidasDeMas += 1;
+          }
         }
       }
     }
 
-    expect(comparados).toBe(fechas.length ** 3);
+    // Que efectivamente haya casos de las dos clases: si no, la prueba pasaría
+    // por vacuidad y no estaría comparando nada.
+    expect(publicadas).toBeGreaterThan(0);
+    expect(traidasDeMas).toBeGreaterThan(0);
   });
 });
 

@@ -51,6 +51,11 @@ export type Maestro = {
   id: MaestroId;
   nombre: string;
   clave: string;
+  /**
+   * Versión del **esquema** de este maestro. Ver la nota de `VERSIONES` sobre
+   * por qué es por maestro y no compartida.
+   */
+  version: number;
   /** De dónde sale el dato, para qué sirve y qué significa que desaparezca. */
   descripcion: string;
   campos: readonly CampoMaestro[];
@@ -59,22 +64,33 @@ export type Maestro = {
 };
 
 /**
- * Versión del **esquema** del maestro, no de los datos.
+ * Versión del **esquema** de cada maestro, no de sus datos.
  *
  * Es la distinción que hay que dejar clavada: un consumidor que cachea usa
  * `actualizado` para saber si hay datos nuevos, y `version` para saber si la
  * forma cambió y su parser dejó de servir. Si `version` fuera un contador de
  * corrida, cada sync invalidaría el parser de todos los consumidores.
+ *
  * Se incrementa ante cualquier cambio de forma: agregar, sacar o renombrar un
  * campo, cambiar el `tipo` de uno, o cambiar la `clave` del maestro. CENTRIA
  * rechaza aprobar una publicación que quite un campo o cambie tipo o clave sin
- * incremento, y el número nunca decrece.
+ * incremento, y el número **nunca decrece**.
  *
- * Es una sola constante para los tres maestros: tocar uno los incrementa a
- * todos. Avisar de más es barato; avisar de menos rompe a un consumidor en
- * silencio.
+ * **Es una por maestro, y eso importa.** Con una constante compartida, tocar un
+ * campo de `feriados` subía la versión de los tres, y CENTRIA responde 502 en
+ * todo maestro cuya versión no coincide con la aprobada hasta que el SUPERADMIN
+ * apruebe la propuesta nueva. Es decir: un cambio en el calendario cortaba la
+ * lectura de `ausencias`, que no había cambiado, con la copia de 24 h como
+ * único colchón contra el reloj de una aprobación humana.
+ *
+ * Arrancan las tres en 1 porque todavía no hay ninguna aprobación viva. Hacerlo
+ * después habría obligado a re-aprobar los tres maestros.
  */
-export const MAESTROS_VERSION = 1;
+export const VERSIONES: Readonly<Record<MaestroId, number>> = {
+  "tipos-licencia": 1,
+  ausencias: 1,
+  feriados: 1,
+};
 
 /**
  * Topes de respuesta fijados por el contrato de CENTRIA.
@@ -104,6 +120,7 @@ export const MAESTROS: readonly Maestro[] = [
     id: "tipos-licencia",
     nombre: "Tipos de licencia",
     clave: "externalId",
+    version: VERSIONES["tipos-licencia"],
     descripcion:
       "Catálogo de ausencias para clasificar horas y licencias. Origen: Tu Recibo, GET /v2/licensesUser/types. " +
       "Una baja significa que el tipo dejó de venir en el catálogo.",
@@ -118,6 +135,7 @@ export const MAESTROS: readonly Maestro[] = [
     id: "ausencias",
     nombre: "Ausencias",
     clave: "externalId",
+    version: VERSIONES.ausencias,
     descripcion:
       "Quién no estuvo, cuándo y bajo qué tipo. Origen: Tu Recibo, POST /v2/licensesUser/licenses. " +
       "Una baja significa que la licencia dejó de venir en el padrón.",
@@ -156,6 +174,7 @@ export const MAESTROS: readonly Maestro[] = [
     id: "feriados",
     nombre: "Feriados",
     clave: "fecha",
+    version: VERSIONES.feriados,
     descripcion:
       "Calendario laboral para calcular días hábiles. Origen: Tu Recibo (panel legacy) más las " +
       "correcciones manuales del módulo.",
@@ -239,7 +258,7 @@ export function armarRespuesta(args: {
 
   return {
     maestro: maestro.id,
-    version: MAESTROS_VERSION,
+    version: maestro.version,
     actualizado: new Date(actualizado || (args.ahora ?? new Date()).getTime()).toISOString(),
     filas,
     bajas,

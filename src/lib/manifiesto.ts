@@ -21,7 +21,7 @@
  * conecte nada.
  */
 
-import { MAESTROS, MAESTROS_VERSION, type CampoMaestro, type Maestro } from "@/lib/maestros";
+import { MAESTROS, type CampoMaestro, type Maestro } from "@/lib/maestros";
 import { MAESTROS_QUE_NECESITAMOS } from "@/lib/centria-cliente";
 import { CODIGO_MODULO, NOMBRE_MODULO, VERSION_MODULO } from "@/lib/env";
 
@@ -62,7 +62,7 @@ function publicar(maestro: Maestro): MaestroPublicado {
     id: maestro.id,
     nombre: maestro.nombre,
     clave: maestro.clave,
-    version: MAESTROS_VERSION,
+    version: maestro.version,
     descripcion: maestro.descripcion,
     campos: maestro.campos.map((c) => ({ ...c })),
   };

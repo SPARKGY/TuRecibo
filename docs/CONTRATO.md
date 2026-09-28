@@ -179,12 +179,21 @@ renombrar un campo, cambiar el `tipo` de uno, o cambiar la `clave` del maestro.
 CENTRIA **rechaza aprobar** una publicación que quite un campo, cambie tipo o
 clave, o baje el número, sin incremento. `version` **nunca decrece**.
 
-Detalle de implementación: `MAESTROS_VERSION` es **una sola constante para los
-tres maestros**, así que tocar uno los incrementa a todos. Es deliberado —avisar
-de más es barato, avisar de menos rompe a un consumidor en silencio— y además
-hace imposible el error de bumpear el maestro equivocado. Si algún día el ruido
-molesta, se parte en una versión por maestro; hasta entonces no vale la
-complejidad.
+**Cada maestro lleva su propia `version`.** No hay una constante compartida: son
+tres números independientes en `VERSIONES` (`src/lib/maestros.ts`), y el
+manifiesto publica el que corresponde a cada uno.
+
+La versión compartida era la forma anterior, y el motivo del cambio no es
+estético. CENTRIA aprueba y sirve **por maestro**: el relay compara la versión
+del sobre contra la aprobada de ese maestro. Con una constante única, subir la
+versión por un cambio en `feriados` movía también la de `ausencias` y
+`tipos-licencia` —que no cambiaron—, y el relay empezaba a responder **502 en los
+tres** hasta que el SUPERADMIN aprobara las tres propuestas nuevas. El único
+colchón es la copia de 24 h. Es decir: un cambio en el maestro más chico podía
+cortar el que más importa.
+
+Partirlo antes de la primera aprobación evita tener que coordinar reaprobaciones
+en cascada. CENTRIA lo soporta sin cambios de su lado.
 
 **`bajas[]` sale solo con `?desde=`.** En una lectura completa, la ausencia de
 la fila ya es la baja; mandar además la lista de todo lo que alguna vez existió
@@ -291,7 +300,8 @@ ajustado manualmente".
 El campo que sí separa ambos casos es `enOrigen` (con `tipoOrigen` y
 `descripcionOrigen` como espejo crudo). **Hoy no se publica**: existe en la base
 pero ningún consumidor lo necesita. Si alguno lo pide, agregarlo al catálogo es
-un cambio chico —hay que incrementar `MAESTROS_VERSION`— y habilita los tres
+un cambio chico —hay que incrementar la `version` de `feriados`, que ya no
+arrastra a los otros dos— y habilita los tres
 estados: sin tocar, corregido, agregado.
 
 `desdeOverride` es **explicativo, no funcional**: no cambia si el día bloquea.
@@ -375,9 +385,23 @@ terminada. El costo es volumen, y el volumen falla ruidoso contra el tope de
 filas con un 413; excluirla fallaría en silencio, dejando de bloquear a alguien
 que quizá sigue de licencia.
 
-La regla vive como función pura (`alcanzaLaVentana`) además de como `where` de
-Prisma, y hay una prueba que compara las dos decisiones caso por caso para que
-no se separen.
+**Un `regreso` anterior a `desde` no cuenta como fin.** El origen puede mandarlo
+—cada fecha se parsea por separado y nadie valida la relación entre ellas— y
+tomarlo como fin sacaba de la ventana una ausencia potencialmente abierta. Esas
+filas caen en el caso "sin fin afirmado" y se publican.
+
+Ese borde lo levantó Timesheet, y el argumento que lo volvió un defecto y no una
+limitación aceptable es del lado del consumidor: **una fila que falta en una
+respuesta completa es indistinguible de "no hubo ausencia"**. No hay forma de
+detectarla desde afuera. Es el mismo modo de falla silencioso que el resto de la
+regla evita.
+
+La regla vive como función pura (`alcanzaLaVentana`) y es la **autoridad**: se
+aplica en memoria sobre lo que devuelve la base. El `where` de Prisma es una
+pre-poda deliberadamente más amplia, porque la regla compara `regreso` contra
+`desde` y eso no se expresa en un `where`. Una prueba verifica la relación
+correcta —**superconjunto, no igualdad**—: la base puede traer de más, nunca
+descartar una fila que la regla habría publicado.
 
 ## Dependencia abierta
 
