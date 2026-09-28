@@ -182,4 +182,3 @@ CREATE UNIQUE INDEX "FeriadoOverride_tenantId_fecha_key" ON "FeriadoOverride"("t
 
 -- CreateIndex
 CREATE UNIQUE INDEX "SelloMaestro_tenantId_maestro_key" ON "SelloMaestro"("tenantId", "maestro");
-

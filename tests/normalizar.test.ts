@@ -55,6 +55,30 @@ describe("fechas", () => {
     expect(parseFechaISO("05/03/2025")).toBeNull();
     expect(parseFechaTuRecibo("")).toBeNull();
   });
+
+  // `Date.UTC(2025, 1, 31)` no falla: devuelve el 3 de marzo. Si eso pasa, una
+  // ingesta de feriados con un día mal tipeado termina marcando el día
+  // equivocado en vez de rechazar la fila.
+  it("rechaza un día que no existe en vez de correrlo al mes siguiente", () => {
+    expect(parseFechaISO("2025-02-31")).toBeNull();
+    expect(parseFechaTuRecibo("31/02/2025")).toBeNull();
+    expect(parseFechaISO("2025-04-31")).toBeNull();
+    expect(parseFechaTuRecibo("00/01/2025")).toBeNull();
+    expect(parseFechaISO("2025-13-01")).toBeNull();
+  });
+
+  it("acepta el 29 de febrero solo en año bisiesto", () => {
+    expect(parseFechaISO("2024-02-29")?.toISOString()).toBe("2024-02-29T00:00:00.000Z");
+    expect(parseFechaISO("2025-02-29")).toBeNull();
+  });
+
+  // Sin `$` en la regex, "2025-12-25 y algo más" pasaba como el 25.
+  it("no acepta basura pegada al final", () => {
+    expect(parseFechaISO("2025-12-25X")).toBeNull();
+    expect(parseFechaISO("2025-12-250")).toBeNull();
+    expect(parseFechaTuRecibo("05/03/2025 10:00")).toBeNull();
+    expect(parseFechaTuRecibo("05/03/20251")).toBeNull();
+  });
 });
 
 describe("mapEstado", () => {

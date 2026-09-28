@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { alcanzaLaVentana, filtroDeVentana, iso, type FechasAusencia } from "@/lib/maestros-lectura";
+import { alcanzaLaVentana, corteDeVentana, cortesDeLectura, filtroDeVentana, iso, type FechasAusencia } from "@/lib/maestros-lectura";
 import { parseFechaTuRecibo, parseFechaISO } from "@/lib/turecibo/normalizar";
 
 const dia = (texto: string | null): Date | null => (texto ? new Date(`${texto}T00:00:00.000Z`) : null);
@@ -171,5 +171,64 @@ describe("el día publicado sobrevive el ida y vuelta", () => {
 
   it("un nulo sigue siendo nulo en vez de convertirse en una fecha inventada", () => {
     expect(iso(null)).toBeNull();
+  });
+});
+
+/**
+ * La detección de salidas compara la ventana en dos momentos: dónde estaba el
+ * corte cuando el consumidor sincronizó y dónde está ahora. Lo que estaba
+ * adentro entonces y no ahora es exactamente lo que hay que informar de baja.
+ */
+
+/**
+ * La detección de salidas compara la ventana en dos momentos: dónde estaba el
+ * corte cuando el consumidor sincronizó y dónde está ahora. Lo que estaba
+ * adentro entonces y no ahora es exactamente lo que hay que informar de baja.
+ */
+describe("cortes de una lectura incremental", () => {
+  const AHORA = new Date("2025-03-31T00:00:00.000Z");
+  const VENTANA = 30;
+
+  it("el corte retrocede la ventana desde el instante dado", () => {
+    expect(corteDeVentana(AHORA, VENTANA).toISOString()).toBe("2025-03-01T00:00:00.000Z");
+  });
+
+  it("sin desde los tres cortes coinciden: no hay 'antes'", () => {
+    const c = cortesDeLectura(AHORA, null, VENTANA);
+    expect(c.anterior.getTime()).toBe(c.corte.getTime());
+    expect(c.lectura.getTime()).toBe(c.corte.getTime());
+  });
+
+  // El que mata el bug: si la base se consultara con el corte de ahora, las
+  // filas que salieron de la ventana no se leerían y la baja sería imposible
+  // de emitir.
+  it("la lectura usa el corte viejo, no el de ahora", () => {
+    const c = cortesDeLectura(AHORA, new Date("2025-03-10T00:00:00.000Z"), VENTANA);
+    expect(c.lectura.toISOString()).toBe("2025-02-08T00:00:00.000Z");
+    expect(c.lectura.getTime()).toBeLessThan(c.corte.getTime());
+
+    // Terminó el 15 de febrero: la pre-poda tiene que traerla, y la autoridad
+    // en memoria la deja fuera de la publicación actual.
+    const f = caso("2025-02-10", "2025-02-15", null);
+    expect(evaluarFiltro(f, c.lectura)).toBe(true);
+    expect(evaluarFiltro(f, c.corte)).toBe(false);
+    expect(alcanzaLaVentana(f, c.anterior)).toBe(true);
+    expect(alcanzaLaVentana(f, c.corte)).toBe(false);
+  });
+
+  it("no marca como salida lo que sigue adentro", () => {
+    const c = cortesDeLectura(AHORA, new Date("2025-03-10T00:00:00.000Z"), VENTANA);
+    const f = caso("2025-03-20", "2025-03-25", null);
+    expect(alcanzaLaVentana(f, c.anterior)).toBe(true);
+    expect(alcanzaLaVentana(f, c.corte)).toBe(true);
+  });
+
+  // Un desde en el futuro dejaría el corte anterior por delante del actual.
+  // El conjunto de salidas queda vacío solo, sin caso especial, porque la
+  // lectura nunca se angosta respecto de la ventana de ahora.
+  it("un desde futuro no angosta la lectura", () => {
+    const c = cortesDeLectura(AHORA, new Date("2025-06-01T00:00:00.000Z"), VENTANA);
+    expect(c.lectura.getTime()).toBe(c.corte.getTime());
+    expect(c.anterior.getTime()).toBeGreaterThan(c.corte.getTime());
   });
 });

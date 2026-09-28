@@ -124,13 +124,26 @@ const PAGINAS_MAXIMAS = 20;
 /**
  * Trae el padrón completo de licencias de la empresa, paginado.
  *
- * El tope de páginas es una guarda contra un origen que devuelva siempre la
- * misma página: sin él, un `total` mal calculado convierte esto en un bucle
- * infinito contra un proveedor externo.
+ * **Falla si no puede probar que la lectura está completa.** No es celo: quien
+ * consume esto lo trata como padrón autoritativo y da de baja toda ausencia
+ * activa que no aparezca. Una lectura truncada devuelta como buena no produce
+ * un error, produce una baja masiva de licencias que siguen vigentes — y la
+ * corrida termina informando éxito.
+ *
+ * Completitud probada, en orden de preferencia:
+ *   1. una página con menos filas que el tope: es la última;
+ *   2. `total` alcanzado, cuando el origen lo informa.
+ *
+ * Todo lo demás es incompleto y tira: agotar el tope de páginas con páginas
+ * llenas, que el origen repita una página, o que `total` quede por encima de lo
+ * acumulado. El tope sigue siendo la guarda contra un bucle infinito, pero
+ * agotarlo ahora es un error y no un final silencioso.
  */
 export async function traerLicencias(cred: Credenciales, jwt: string): Promise<LicenciaCruda[]> {
   const todas: LicenciaCruda[] = [];
   const vistas = new Set<string>();
+  let completo = false;
+  let total: number | null = null;
 
   for (let pagina = 1; pagina <= PAGINAS_MAXIMAS; pagina++) {
     const offset = (pagina - 1) * LIMITE_POR_PAGINA;
@@ -145,8 +158,9 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
       results?: { data?: LicenciaCruda[] };
     } | null;
 
+    if (typeof data?.pagination?.total === "number") total = data.pagination.total;
+
     const filas = data?.results?.data ?? [];
-    if (filas.length === 0) break;
 
     // Si el origen repite la página, cortamos. Detectarlo por id evita confiar
     // en que `total` y `pagination` sean coherentes entre sí.
@@ -158,10 +172,34 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
       todas.push(fila);
       nuevas++;
     }
-    if (nuevas === 0) break;
 
-    const total = data?.pagination?.total;
-    if (typeof total === "number" && todas.length >= total) break;
+    // Una página incompleta —incluida la vacía— solo puede ser la última.
+    if (filas.length < LIMITE_POR_PAGINA) {
+      completo = true;
+      break;
+    }
+    // Página llena sin nada nuevo: el origen está repitiendo. No sabemos qué
+    // falta, así que no se puede afirmar completitud.
+    if (nuevas === 0) break;
+    if (total !== null && todas.length >= total) {
+      completo = true;
+      break;
+    }
+  }
+
+  if (!completo) {
+    throw new TuReciboError(
+      `La lectura del padrón de licencias quedó incompleta: ${todas.length} filas en ${PAGINAS_MAXIMAS} páginas ` +
+        `sin señal de fin${total !== null ? ` (el origen informa ${total})` : ""}. ` +
+        "Se aborta antes de reconciliar para no dar de baja licencias vigentes que no se alcanzaron a leer.",
+    );
+  }
+
+  if (total !== null && todas.length < total) {
+    throw new TuReciboError(
+      `El padrón de licencias devolvió ${todas.length} filas pero el origen informa ${total}. ` +
+        "Se aborta antes de reconciliar: las que falten se darían de baja estando vigentes.",
+    );
   }
 
   return todas;

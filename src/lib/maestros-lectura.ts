@@ -89,7 +89,7 @@ export function alcanzaLaVentana(fechas: FechasAusencia, corte: Date): boolean {
 export async function leerFilas(
   tenantId: string,
   maestro: MaestroId,
-  opciones: { ventanaDias: number; ahora?: Date },
+  opciones: { ventanaDias: number; ahora?: Date; desde?: Date | null },
 ): Promise<Fila[]> {
   if (maestro === "tipos-licencia") return leerTipos(tenantId);
   if (maestro === "feriados") return leerFeriados(tenantId);
@@ -146,20 +146,89 @@ export function filtroDeVentana(corte: Date) {
   return [{ desde: { gte: corte } }, { hasta: { gte: corte } }, { hasta: null }];
 }
 
-async function leerAusencias(tenantId: string, opciones: { ventanaDias: number; ahora?: Date }): Promise<Fila[]> {
+/**
+ * Corte de la ventana para un instante dado.
+ *
+ * Lo usa la lectura incremental para preguntar dos veces: dónde estaba el corte
+ * cuando el consumidor sincronizó por última vez, y dónde está ahora.
+ */
+export function corteDeVentana(instante: Date, ventanaDias: number): Date {
+  return new Date(instante.getTime() - ventanaDias * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Los tres cortes que necesita una lectura.
+ *
+ * `corte` es la ventana de ahora, la que decide qué se publica. `anterior` es
+ * dónde estaba la ventana cuando el consumidor sincronizó. `lectura` es el más
+ * viejo de los dos y es el que va a la base: con el corte actual, las filas que
+ * se cayeron de la ventana ni se leerían, y una baja que no se lee no se puede
+ * informar.
+ *
+ * Sin `desde` los tres coinciden: una lectura completa no tiene "antes".
+ */
+export function cortesDeLectura(
+  ahora: Date,
+  desde: Date | null | undefined,
+  ventanaDias: number,
+): { corte: Date; anterior: Date; lectura: Date } {
+  const corte = corteDeVentana(ahora, ventanaDias);
+  const anterior = desde ? corteDeVentana(desde, ventanaDias) : corte;
+  return { corte, anterior, lectura: anterior < corte ? anterior : corte };
+}
+
+async function leerAusencias(
+  tenantId: string,
+  opciones: { ventanaDias: number; ahora?: Date; desde?: Date | null },
+): Promise<Fila[]> {
   const ahora = opciones.ahora ?? new Date();
-  const corte = new Date(ahora.getTime() - opciones.ventanaDias * 24 * 60 * 60 * 1000);
+  const cortes = cortesDeLectura(ahora, opciones.desde, opciones.ventanaDias);
 
   const candidatas = await prisma.ausencia.findMany({
     where: {
       tenantId,
-      OR: filtroDeVentana(corte),
+      OR: filtroDeVentana(cortes.lectura),
     },
   });
 
-  const filas = candidatas.filter((f) => alcanzaLaVentana(f, corte));
+  const filas: typeof candidatas = [];
+  const salidas: typeof candidatas = [];
 
-  return filas.map((f) => ({
+  for (const f of candidatas) {
+    if (alcanzaLaVentana(f, cortes.corte)) {
+      filas.push(f);
+    } else if (opciones.desde && alcanzaLaVentana(f, cortes.anterior)) {
+      // Estaba publicada la última vez y ahora no: el consumidor la tiene
+      // cacheada y nadie más se lo va a decir.
+      salidas.push(f);
+    }
+  }
+
+  return [
+    ...filas.map((f) => mapearAusencia(f)),
+    ...salidas.map((f) => ({ ...mapearAusencia(f), salioDeVentana: true })),
+  ];
+}
+
+function mapearAusencia(f: {
+  externalId: string;
+  activa: boolean;
+  actualizadaEn: Date;
+  personaExternalId: string | null;
+  tipoExternalId: string | null;
+  tipoNombre: string | null;
+  estado: string;
+  desde: Date | null;
+  hasta: Date | null;
+  regreso: Date | null;
+  medioDia: boolean;
+  horas: number | null;
+  legajo: string | null;
+  dni: string | null;
+  cuil: string | null;
+  motivo: string | null;
+}): Fila {
+  return {
     clave: f.externalId,
     activa: f.activa,
     actualizada: f.actualizadaEn,
@@ -179,7 +248,7 @@ async function leerAusencias(tenantId: string, opciones: { ventanaDias: number; 
       cuil: f.cuil,
       motivo: f.motivo,
     },
-  }));
+  };
 }
 
 /** Sello del maestro, para que `actualizado` distinga "sin cambios" de "sin sync". */

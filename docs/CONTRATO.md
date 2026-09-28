@@ -199,6 +199,31 @@ en cascada. CENTRIA lo soporta sin cambios de su lado.
 la fila ya es la baja; mandar además la lista de todo lo que alguna vez existió
 filtraría el historial entero a quien solo pidió el estado actual.
 
+**Una baja significa "dejó de estar publicada", por cualquiera de dos motivos:**
+
+1. La fila dejó de venir en el padrón del origen (`activa: false`).
+2. La ausencia **salió de la ventana de publicación** por el paso del tiempo.
+
+El segundo caso se agregó después de la primera revisión. Antes, una ausencia
+que se caía de la ventana no aparecía ni en `filas` ni en `bajas`, y quien
+cachea con `?desde=` la retenía **para siempre**: desde el lado del consumidor,
+una fila que deja de venir es indistinguible de una que no cambió.
+
+La detección compara la ventana en dos momentos —dónde estaba el corte cuando
+el consumidor sincronizó y dónde está ahora— y publica como baja lo que estaba
+adentro entonces y no ahora. El conjunto queda acotado por `desde`, que es lo
+que el protocolo incremental ya acota.
+
+**La forma pública no cambia:** `bajas[]` sigue siendo un arreglo de claves. Lo
+que se amplía es la semántica, así que **no corresponde incrementar la versión
+del maestro** por la regla acordada (quitar campo, cambiar tipo o cambiar
+clave). Un consumidor que ya procesaba `bajas[]` procesa estas igual.
+
+Corolario que conviene tener escrito: **una baja no significa que la ausencia
+terminó.** Significa que este módulo dejó de publicarla. Con una ventana de 90
+días, una licencia de 2023 aparece en `bajas[]` sin que haya pasado nada en el
+origen.
+
 ### `actualizado` y el sello
 
 Sale de `SelloMaestro`, que se escribe en cada corrida exitosa **aunque no haya

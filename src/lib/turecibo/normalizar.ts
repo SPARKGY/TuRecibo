@@ -30,27 +30,44 @@ export function dniDesdeCuil(cuil: string | null | undefined): string | null {
 }
 
 /**
+ * Construye una fecha UTC **solo si el día existe**.
+ *
+ * `Date.UTC` no valida: normaliza. `Date.UTC(2025, 1, 31)` no falla, devuelve el
+ * 3 de marzo. Sin la comprobación de ida y vuelta, un `2025-02-31` del origen se
+ * convertía en silencio en otro día, y en la ingesta o el override de feriados
+ * eso significa marcar como no hábil una fecha que nadie pidió.
+ */
+function fechaUtcExacta(yyyy: number, mm: number, dd: number): Date | null {
+  const fecha = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (Number.isNaN(fecha.getTime())) return null;
+  const vuelve =
+    fecha.getUTCFullYear() === yyyy && fecha.getUTCMonth() === mm - 1 && fecha.getUTCDate() === dd;
+  return vuelve ? fecha : null;
+}
+
+/**
  * Parsea DD/MM/YYYY a medianoche UTC.
  *
  * Tu Recibo manda el día sin zona. Construirlo con `new Date(texto)` lo
  * interpretaría en la zona del servidor y, al oeste de Greenwich, correría cada
  * licencia un día hacia atrás.
+ *
+ * La expresión está anclada en las dos puntas: sin `$`, un `15/01/2025 y algo`
+ * pasaba como fecha válida y el resto del texto se descartaba sin aviso.
  */
 export function parseFechaTuRecibo(texto: string | null | undefined): Date | null {
-  const m = (texto ?? "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  const m = (texto ?? "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return null;
   const [, dd, mm, yyyy] = m;
-  const fecha = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-  return Number.isNaN(fecha.getTime()) ? null : fecha;
+  return fechaUtcExacta(Number(yyyy), Number(mm), Number(dd));
 }
 
 /** Parsea YYYY-MM-DD (el formato del panel legacy de feriados) a UTC. */
 export function parseFechaISO(texto: string | null | undefined): Date | null {
-  const m = (texto ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const m = (texto ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
   const [, yyyy, mm, dd] = m;
-  const fecha = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-  return Number.isNaN(fecha.getTime()) ? null : fecha;
+  return fechaUtcExacta(Number(yyyy), Number(mm), Number(dd));
 }
 
 /**

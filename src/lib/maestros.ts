@@ -204,6 +204,18 @@ export type Fila = {
   activa: boolean;
   actualizada: Date;
   datos: Record<string, Dato>;
+  /**
+   * La fila existe y sigue activa, pero **ya no entra en la ventana de
+   * publicación**. Solo la produce una lectura incremental, y solo para
+   * `ausencias`.
+   *
+   * Es una baja desde el punto de vista del consumidor: dejó de estar en el
+   * conjunto publicado. Sin esto, una ausencia que se cae de la ventana por el
+   * mero paso del tiempo no aparecía ni en `filas` ni en `bajas`, y quien
+   * cachea con `?desde=` la retenía para siempre —bloqueando un día que ya no
+   * corresponde, sin forma de enterarse—.
+   */
+  salioDeVentana?: boolean;
 };
 
 export type RespuestaMaestro = {
@@ -242,6 +254,16 @@ export function armarRespuesta(args: {
 
   for (const fila of args.filas) {
     ultimoCambio = Math.max(ultimoCambio, fila.actualizada.getTime());
+
+    // La salida de la ventana no se mide por `actualizada`: la fila se cae por
+    // el paso del tiempo, sin que nadie la toque. Por eso se evalúa antes del
+    // corte incremental, que si no la descartaría por vieja justo cuando hay
+    // que avisar que se fue.
+    if (fila.salioDeVentana) {
+      if (desde) bajas.push(fila.clave);
+      continue;
+    }
+
     if (desde && fila.actualizada < desde) continue;
     if (fila.activa) {
       filas.push(Object.fromEntries(salida.map((c) => [c, fila.datos[c] ?? null])));

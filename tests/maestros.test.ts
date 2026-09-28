@@ -116,3 +116,67 @@ describe("armarRespuesta", () => {
     expect(r.actualizado).toBe("2025-03-10T12:00:00.000Z");
   });
 });
+
+/**
+ * Una ausencia puede dejar de publicarse sin que nadie la toque: se cae de la
+ * ventana por el mero paso del tiempo. Quien lee con `?desde=` cachea y no
+ * tiene forma de enterarse — la fila simplemente deja de venir, que es
+ * indistinguible de "no cambió". Por eso sale como baja explícita.
+ */
+describe("salida de la ventana de publicación", () => {
+  const sello = new Date("2025-03-11T03:00:00.000Z");
+  const desde = new Date("2025-03-09T00:00:00.000Z");
+
+  const salida = (clave: string, actualizada: Date) =>
+    fila(clave, { salioDeVentana: true, actualizada });
+
+  it("una ausencia que salió de la ventana se informa como baja", () => {
+    const r = armarRespuesta({
+      maestro,
+      filas: [salida("200", new Date("2025-03-10T12:00:00.000Z"))],
+      campos: ["estado"],
+      desde,
+      selloActualizado: sello,
+    });
+    expect(r.bajas).toEqual(["200"]);
+    expect(r.filas).toEqual([]);
+  });
+
+  // El punto fino: la fila se cayó por el paso del tiempo, así que su
+  // `actualizada` es vieja por definición. Si el corte incremental se
+  // aplicara primero, la baja se descartaría justo en el caso que la motiva.
+  it("la baja sale aunque la fila no se haya tocado desde el corte", () => {
+    const r = armarRespuesta({
+      maestro,
+      filas: [salida("201", new Date("2024-01-01T00:00:00.000Z"))],
+      campos: ["estado"],
+      desde,
+      selloActualizado: sello,
+    });
+    expect(r.bajas).toEqual(["201"]);
+  });
+
+  it("sin desde no se publica: en lectura completa la fila ausente ya es la baja", () => {
+    const r = armarRespuesta({
+      maestro,
+      filas: [fila("100"), salida("202", new Date("2025-03-10T12:00:00.000Z"))],
+      campos: ["estado"],
+      desde: null,
+      selloActualizado: sello,
+    });
+    expect(r.bajas).toEqual([]);
+    expect(r.filas.map((f) => f.externalId)).toEqual(["100"]);
+  });
+
+  it("nunca sale a la vez como fila y como baja", () => {
+    const r = armarRespuesta({
+      maestro,
+      filas: [fila("100"), salida("203", new Date("2025-03-10T12:00:00.000Z"))],
+      campos: ["estado"],
+      desde,
+      selloActualizado: sello,
+    });
+    expect(r.filas.map((f) => f.externalId)).toEqual(["100"]);
+    expect(r.bajas).toEqual(["203"]);
+  });
+});

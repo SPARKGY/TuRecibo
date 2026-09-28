@@ -56,7 +56,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const ventanaDias = resolverVentana(searchParams.get("ventanaDias"));
 
   const [filas, selloActualizado] = await Promise.all([
-    leerFilas(auth.datos.tenantId, maestro.id, { ventanaDias }),
+    leerFilas(auth.datos.tenantId, maestro.id, { ventanaDias, desde }),
     leerSello(auth.datos.tenantId, maestro.id),
   ]);
 
