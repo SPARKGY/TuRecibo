@@ -143,6 +143,13 @@ const PAGINAS_MAXIMAS = 20;
  * El orden de las comprobaciones es parte del contrato de esta función: la
  * inconsistencia se evalúa **antes** que el fin por página corta. Al revés, una
  * última página de diez filas ya vistas se leía como final legítimo.
+ *
+ * **Un arreglo vacío es la señal de fin, así que nada que no sea un arreglo
+ * puede terminar valiendo `[]`.** Esa es la razón de que el parseo valide en
+ * vez de tolerar: un 200 con cuerpo ilegible, sin `results.data`, o con filas
+ * sin id, se volvía silenciosamente "no hay más licencias" y la reconciliación
+ * daba de baja todo lo que no se alcanzó a leer. Una respuesta rota tiene que
+ * doler acá, que es donde se distingue de un padrón que terminó.
  */
 export async function traerLicencias(cred: Credenciales, jwt: string): Promise<LicenciaCruda[]> {
   const todas: LicenciaCruda[] = [];
@@ -158,29 +165,64 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
     );
     if (!res.ok) throw new TuReciboError(`El padrón de licencias devolvió HTTP ${res.status} en la página ${pagina}`);
 
-    const data = (await res.json().catch(() => null)) as {
-      pagination?: { total?: number };
-      results?: { data?: LicenciaCruda[] };
-    } | null;
+    const crudo = await res.text();
+    let data: { pagination?: { total?: number }; results?: { data?: unknown } } | null;
+    try {
+      data = JSON.parse(crudo) as typeof data;
+    } catch {
+      // Un 200 con cuerpo ilegible **no es una página vacía**. Antes esto caía
+      // a `null` y de ahí a `[]`, y un arreglo vacío es justamente la señal de
+      // "última página": un error de transporte se disfrazaba de fin de padrón.
+      throw new TuReciboError(
+        `La página ${pagina} del padrón de licencias devolvió HTTP 200 con un cuerpo que no es JSON ` +
+          `(${crudo.length} bytes). Se aborta antes de reconciliar: tomarlo por página vacía daría de baja ` +
+          "todas las licencias que no se alcanzaron a leer.",
+      );
+    }
 
-    if (typeof data?.pagination?.total === "number") total = data.pagination.total;
+    if (data === null || typeof data !== "object") {
+      throw new TuReciboError(
+        `La página ${pagina} del padrón de licencias devolvió un JSON que no es un objeto. ` +
+          "Se aborta antes de reconciliar.",
+      );
+    }
 
-    const filas = data?.results?.data ?? [];
+    if (typeof data.pagination?.total === "number") total = data.pagination.total;
+
+    // `results.data` tiene que existir y ser arreglo. Que falte es un cambio de
+    // contrato del origen o una respuesta de error con forma de éxito; en
+    // ninguno de los dos casos significa "no hay más licencias".
+    const contenido = data.results?.data;
+    if (!Array.isArray(contenido)) {
+      throw new TuReciboError(
+        `La página ${pagina} del padrón de licencias no trae 'results.data' como arreglo ` +
+          `(llegó ${contenido === undefined ? "ausente" : typeof contenido}). ` +
+          "Se aborta antes de reconciliar: la ausencia del campo no es un padrón vacío.",
+      );
+    }
+    const filas = contenido as LicenciaCruda[];
 
     // Si el origen repite la página, cortamos. Detectarlo por id evita confiar
     // en que `total` y `pagination` sean coherentes entre sí.
-    let nuevas = 0;
     let repetidas = 0;
     for (const fila of filas) {
       const id = String(fila?.id_licencia ?? "").trim();
-      if (!id) continue;
+      // Una fila sin id no se puede reconciliar ni deduplicar: no hay con qué
+      // cruzarla. Descartarla en silencio hacía que el conteo de la página
+      // siguiera pareciendo completo mientras el padrón perdía filas.
+      if (!id) {
+        throw new TuReciboError(
+          `La página ${pagina} del padrón de licencias trae una fila sin 'id_licencia'. ` +
+            "Se aborta antes de reconciliar: una fila que no se puede identificar tampoco se puede " +
+            "distinguir de una licencia dada de baja.",
+        );
+      }
       if (vistas.has(id)) {
         repetidas++;
         continue;
       }
       vistas.add(id);
       todas.push(fila);
-      nuevas++;
     }
 
     // Una fila ya vista significa que el origen no está dando un snapshot
@@ -190,11 +232,12 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
     // **El orden importa y es el arreglo.** Con la comprobación de página corta
     // primero, una última página de 10 filas ya vistas se leía como "llegamos
     // al final" y un padrón truncado salía informado como completo. Una página
-    // corta solo prueba el fin si además trae filas nuevas.
+    // corta no prueba el fin si trae filas repetidas.
     if (repetidas > 0) break;
-    // Página llena sin nada nuevo: el origen está repitiendo o devolviendo
-    // basura sin id. Tampoco se puede afirmar completitud.
-    if (filas.length > 0 && nuevas === 0) break;
+
+    // Ya no hace falta un chequeo de "página llena sin nada nuevo": una fila
+    // sin id tira, y una fila repetida entra por `repetidas`. No quedan
+    // caminos por los que una página con filas no aporte ninguna.
 
     // Una página incompleta —incluida la vacía— solo puede ser la última.
     if (filas.length < LIMITE_POR_PAGINA) {

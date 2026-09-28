@@ -29,11 +29,12 @@ function pagina(n: number, base: number) {
 }
 
 function responder(filas: unknown[], total?: number) {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ pagination: total === undefined ? {} : { total }, results: { data: filas } }),
-  } as unknown as Response;
+  return cuerpo(JSON.stringify({ pagination: total === undefined ? {} : { total }, results: { data: filas } }));
+}
+
+/** Respuesta 200 con un cuerpo textual arbitrario. */
+function cuerpo(texto: string) {
+  return { ok: true, status: 200, text: async () => texto } as unknown as Response;
 }
 
 function mockearPaginas(paginas: { filas: unknown[]; total?: number }[]) {
@@ -42,6 +43,18 @@ function mockearPaginas(paginas: { filas: unknown[]; total?: number }[]) {
     const p = paginas[Math.min(i, paginas.length - 1)]!;
     i++;
     return responder(p.filas, p.total);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** Primera página llena y legítima, seguida de un cuerpo crudo cualquiera. */
+function mockearSegundaCruda(texto: string) {
+  let i = 0;
+  const fetchMock = vi.fn(async () => {
+    const res = i === 0 ? responder(pagina(LIMITE, 0)) : cuerpo(texto);
+    i++;
+    return res;
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -109,7 +122,71 @@ describe("traerLicencias: completitud probada", () => {
       { filas: pagina(LIMITE, 0) },
       { filas: Array.from({ length: LIMITE }, () => ({ id_licencia: "" })) },
     ]);
-    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/incompleta/i);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/sin 'id_licencia'/i);
+  });
+});
+
+/**
+ * Un arreglo vacío es la señal de "última página". Por eso cualquier respuesta
+ * que degrade a `[]` es peligrosa: un error de transporte o un cambio de
+ * contrato se vuelven indistinguibles de un padrón que terminó, y la
+ * reconciliación da de baja todo lo que no se alcanzó a leer.
+ *
+ * Todas estas pruebas montan una **primera página llena y legítima**, que es lo
+ * que hace daño: sin ella no habría nada que dar de baja.
+ */
+describe("traerLicencias: respuestas rotas no son páginas vacías", () => {
+  it("un 200 con cuerpo que no es JSON aborta", async () => {
+    mockearSegundaCruda("<html><body>502 Bad Gateway</body></html>");
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/no es JSON/i);
+  });
+
+  it("un 200 con cuerpo vacío aborta", async () => {
+    mockearSegundaCruda("");
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/no es JSON/i);
+  });
+
+  it("un JSON que no es objeto aborta", async () => {
+    mockearSegundaCruda("null");
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/no es un objeto/i);
+  });
+
+  it("un JSON sin `results.data` aborta", async () => {
+    mockearSegundaCruda(JSON.stringify({ pagination: { total: 99999 } }));
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/results\.data/i);
+  });
+
+  // Una respuesta de error con forma de éxito: 200, JSON válido, y un mensaje
+  // donde iba el arreglo.
+  it("`results.data` que no es arreglo aborta", async () => {
+    mockearSegundaCruda(JSON.stringify({ results: { data: { error: "sesión vencida" } } }));
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/results\.data/i);
+  });
+
+  // El caso de la tercera revisión: página corta —o sea, señal de fin— con una
+  // fila que no se puede identificar. Antes se descartaba en silencio y el
+  // padrón quedaba corto pero declarado completo.
+  it("una página corta con una fila sin id aborta en vez de cerrar el padrón", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: [...pagina(4, LIMITE), { id_licencia: null }] }]);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/sin 'id_licencia'/i);
+  });
+
+  it("una fila con id en blanco cuenta como fila sin id", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: [...pagina(4, LIMITE), { id_licencia: "   " }] }]);
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/sin 'id_licencia'/i);
+  });
+
+  it("el mensaje explica que no se reconcilia", async () => {
+    mockearSegundaCruda("no soy json");
+    await expect(traerLicencias(CRED, "jwt")).rejects.toThrow(/antes de reconciliar/i);
+  });
+
+  // La contracara: una página vacía **bien formada** sí es fin legítimo y tiene
+  // que seguir funcionando. Si el endurecimiento rompiera esto, el padrón cuyo
+  // tamaño es múltiplo exacto del tope nunca terminaría.
+  it("una página vacía bien formada sigue siendo fin de padrón", async () => {
+    mockearPaginas([{ filas: pagina(LIMITE, 0) }, { filas: [] }]);
+    await expect(traerLicencias(CRED, "jwt")).resolves.toHaveLength(LIMITE);
   });
 
   it("si el origen informa más filas de las leídas, aborta", async () => {
