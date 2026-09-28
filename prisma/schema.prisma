@@ -1,0 +1,241 @@
+// Base propia del módulo Tu Recibo.
+//
+// Dos decisiones mandan sobre todo este esquema:
+//
+// 1. **Historial completo.** KAiROS borra `LicenciaCache` entera en cada corrida
+//    y la recrea. Acá no se puede: el módulo es el dueño del dato y Tu Recibo no
+//    permite consultar el pasado (no hay endpoint por persona ni por rango). Lo
+//    que no guardemos, se pierde. Por eso nada se borra: lo que desaparece del
+//    origen se marca de baja con fecha, y así el maestro publicado puede
+//    responder `bajas[]` de forma incremental con `?desde=`.
+//
+// 2. **Multi-tenant.** `tenantId` viaja en todas las tablas. Es el id que manda
+//    CENTRIA en `x-tenant-id`; no hay FK porque el padrón de tenants vive en
+//    CENTRIA, no acá.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// De dónde salió un dato. Tu Recibo no es una fuente sola: son dos APIs y un
+/// panel legacy que hay que raspar con un navegador.
+enum Fuente {
+  /// GET /v2/licensesUser/types
+  TIPOS_LICENCIA
+  /// POST /v2/licensesUser/licenses (padrón completo de la empresa, paginado)
+  AUSENCIAS
+  /// POST /ajax/licencias/feriados.php en el panel legacy, vía robot
+  FERIADOS
+}
+
+enum EstadoCorrida {
+  EN_CURSO
+  OK
+  FALLIDA
+  /// Terminó sin escribir porque el origen devolvió algo que no se puede
+  /// distinguir de "se dieron todos de baja". Ver `docs/RUNBOOK.md`.
+  ABORTADA
+}
+
+/// Estado canónico de una ausencia. Tu Recibo tiene seis estados propios que se
+/// mapean acá por `id_estado`, no por texto: un renombre en el origen no debe
+/// cambiar el comportamiento en silencio.
+enum EstadoAusencia {
+  SOLICITADA
+  APROBADA
+  RECHAZADA
+}
+
+enum TipoFeriado {
+  FERIADO_NACIONAL
+  NO_LABORABLE
+}
+
+/// Qué hizo la mano humana sobre un feriado espejado.
+enum AccionOverride {
+  /// Un feriado que Tu Recibo no trae y acá sí vale.
+  ALTA
+  /// Un feriado que Tu Recibo trae y acá no corresponde.
+  BAJA
+  /// Corrige tipo y/o descripción de uno que sí vino.
+  CAMBIO
+}
+
+/// Referencias a las credenciales de Tu Recibo por tenant.
+///
+/// Guarda **nombres de secreto**, nunca valores. El contenido vive en Key Vault
+/// y se resuelve por App Setting. Que el esquema sea por tenant no es
+/// anticipación gratuita: hoy hay un solo juego de credenciales, pero si un
+/// segundo tenant llega con las suyas, no debería hacer falta migrar la tabla.
+model CredencialTuRecibo {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  /// Nombre de la variable de entorno con el usuario. No el usuario.
+  usuarioEnv    String
+  /// Nombre de la variable de entorno con la contraseña. No la contraseña.
+  passwordEnv   String
+  baseUrl       String   @default("https://api.turecibo.com")
+  adminUrl      String   @default("https://admin.turecibo.com")
+  activa        Boolean  @default(true)
+  creadaEn      DateTime @default(now())
+  actualizadaEn DateTime @updatedAt
+
+  @@index([activa])
+}
+
+/// Una corrida de extracción. Existe aunque falle: una corrida que no quedó
+/// registrada es una corrida que nadie va a notar que no pasó.
+model CorridaSync {
+  id          String        @id @default(cuid())
+  tenantId    String
+  fuente      Fuente
+  estado      EstadoCorrida @default(EN_CURSO)
+  /// Disparada a mano desde el panel, en vez de por el programador.
+  manual      Boolean       @default(false)
+  iniciadaEn  DateTime      @default(now())
+  terminadaEn DateTime?
+  /// Filas que devolvió el origen.
+  leidas      Int           @default(0)
+  altas       Int           @default(0)
+  cambios     Int           @default(0)
+  bajas       Int           @default(0)
+  /// Filas que el origen trajo y no se pudieron interpretar.
+  descartadas Int           @default(0)
+  error       String?       @db.Text
+
+  @@index([tenantId, fuente, iniciadaEn])
+  @@index([tenantId, estado])
+}
+
+/// Catálogo de tipos de licencia. Hoy lo sincroniza CENTRIA; pasa a este módulo.
+model TipoLicencia {
+  id            String    @id @default(cuid())
+  tenantId      String
+  /// `id` de Tu Recibo. Es la clave: el nombre cambia, esto no.
+  externalId    String
+  nombre        String
+  /// "t" | "f" en el origen. En "f" el tipo está retirado aunque siga viniendo.
+  visible       Boolean   @default(true)
+  esVacaciones  Boolean   @default(false)
+  activo        Boolean   @default(true)
+  /// Cuándo dejó de venir en el catálogo del origen.
+  bajaEn        DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId, actualizadoEn])
+}
+
+/// Ausencia individual. Es dato personal: `motivo` está clasificado como
+/// restringido y solo sale bajo conexión con justificación escrita.
+model Ausencia {
+  id                String         @id @default(cuid())
+  tenantId          String
+  /// `id_licencia` de Tu Recibo.
+  externalId        String
+  /// DNI derivado del CUIL. Es lo único que permite cruzar con `personas`.
+  dni               String?
+  cuil              String?
+  legajo            String?
+  /// `externalId` de la persona en el maestro `personas` de CENTRIA, resuelto
+  /// por DNI. Nulo mientras no se haya podido cruzar.
+  personaExternalId String?
+  tipoExternalId    String?
+  tipoNombre        String?
+  estado            EstadoAusencia
+  /// Estado crudo del origen, por si el mapeo se queda corto.
+  estadoOrigen      String?
+  idEstadoOrigen    String?
+  desde             DateTime?
+  hasta             DateTime?
+  /// Primer día de regreso (exclusivo), tal como lo entiende el origen.
+  regreso           DateTime?
+  medioDia          Boolean        @default(false)
+  horas             Float?
+  motivo            String?        @db.Text
+  activa            Boolean        @default(true)
+  bajaEn            DateTime?
+  creadaEn          DateTime       @default(now())
+  actualizadaEn     DateTime       @updatedAt
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId, actualizadaEn])
+  @@index([tenantId, dni])
+  @@index([tenantId, desde])
+}
+
+/// Feriado espejado del panel legacy. La clave es la fecha.
+model Feriado {
+  id            String      @id @default(cuid())
+  tenantId      String
+  /// Medianoche UTC del día. El origen lo da como YYYY-MM-DD.
+  fecha         DateTime    @db.Date
+  /// Valores vigentes: lo del origen, ya con la corrección manual aplicada.
+  tipo          TipoFeriado
+  descripcion   String
+  /// Si la fila vigente la manda el origen o la manda una corrección humana.
+  desdeOverride Boolean     @default(false)
+  /// Si la última corrida que cubrió este año lo trajo desde Tu Recibo.
+  enOrigen      Boolean     @default(true)
+  /// Lo que dijo el origen, **antes** del override.
+  ///
+  /// Sin esto, quitar una corrección de tipo CAMBIO no tendría a qué volver: el
+  /// valor original ya habría sido pisado, y el feriado se daría de baja como si
+  /// el origen nunca lo hubiera traído. Es la diferencia entre una corrección
+  /// reversible y una destructiva.
+  tipoOrigen        TipoFeriado?
+  descripcionOrigen String?
+  activo        Boolean     @default(true)
+  bajaEn        DateTime?
+  creadoEn      DateTime    @default(now())
+  actualizadoEn DateTime    @updatedAt
+
+  @@unique([tenantId, fecha])
+  @@index([tenantId, actualizadoEn])
+}
+
+/// Corrección manual sobre un feriado. **Sobrevive al sync**: la reconciliación
+/// aplica el override después de espejar, y la corrida lo registra en vez de
+/// pisarlo en silencio. Sin esta tabla, arreglar un feriado que el panel legacy
+/// trae mal duraría hasta la madrugada siguiente.
+model FeriadoOverride {
+  id            String         @id @default(cuid())
+  tenantId      String
+  fecha         DateTime       @db.Date
+  accion        AccionOverride
+  /// Requeridos para ALTA y CAMBIO; ignorados en BAJA.
+  tipo          TipoFeriado?
+  descripcion   String?
+  /// Por qué se corrigió. Es lo único que explica la diferencia con el origen.
+  motivo        String         @db.Text
+  /// `x-user-id` de CENTRIA de quien lo cargó.
+  autorId       String
+  autorEmail    String?
+  creadoEn      DateTime       @default(now())
+  actualizadoEn DateTime       @updatedAt
+
+  @@unique([tenantId, fecha])
+  @@index([tenantId])
+}
+
+/// Sello de actualización por maestro publicado.
+///
+/// Existe para el caso borde en el que un maestro no tiene ninguna fila: sin
+/// esto, `actualizado` tendría que inventarse con `new Date()` y un consumidor
+/// que cachea por ese campo nunca sabría si el dato es viejo o si no hay dato.
+model SelloMaestro {
+  id            String   @id @default(cuid())
+  tenantId      String
+  maestro       String
+  /// Se incrementa en cada corrida que escribió algo.
+  revision      Int      @default(0)
+  actualizadoEn DateTime @default(now())
+
+  @@unique([tenantId, maestro])
+}

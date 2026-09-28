@@ -1,0 +1,10 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    // `== null` se permite a propósito: es la forma corta de "null o
+    // undefined", y escribirla con `===` obliga a repetir la condición dos
+    // veces, que es donde se olvida una de las dos.
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
+    "no-console": ["warn", { "allow": ["warn", "error"] }]
+  }
+}

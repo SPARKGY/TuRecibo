@@ -1,0 +1,215 @@
+# Contrato con CENTRIA
+
+## Los dos secretos
+
+Es lo que más se confunde y lo que más rompe. Son **dos secretos opacos
+distintos, en direcciones opuestas**.
+
+| | Token de entrada | Credencial |
+|---|---|---|
+| Dirección | CENTRIA → módulo | módulo → CENTRIA |
+| Header | `x-internal-token` | `x-service-token` |
+| Acompaña | `x-tenant-id` | `x-module-code` |
+| Variable | `CENTRIA_ENTRY_TOKEN` | `CENTRIA_SERVICE_TOKEN` |
+| Lo genera | CENTRIA, al registrar | CENTRIA, al registrar |
+| Protege | manifiesto, salud, publicación | lectura de maestros nativos |
+
+No son JWT ni HMAC: son cadenas opacas. Por eso la validación
+(`src/lib/tokens.ts`) compara con SHA-256 + `timingSafeEqual` y no con `===`.
+Un `===` corta en el primer byte distinto y filtra el prefijo a quien mida.
+
+### Rotación
+
+Cada variable acepta un `<VAR>_PREVIO`. Durante la ventana valen las dos y el
+uso del anterior queda en los logs:
+
+```
+[rotacion] Se aceptó CENTRIA_ENTRY_TOKEN_PREVIO. Todavía hay un llamador con el secreto viejo.
+```
+
+Cuando ese aviso deja de aparecer, se borra el `_PREVIO`. Si se borra antes, el
+llamador que todavía no rotó empieza a recibir 403.
+
+### Fallar cerrado
+
+Una variable vacía, ausente o con una referencia de Key Vault **sin resolver**
+cuenta como no configurada y devuelve 500, nunca 200.
+
+Esto importa porque una referencia sin resolver llega como el texto literal
+`@Microsoft.KeyVault(...)`, no vacía. Sin la guarda, el síntoma sería un 403
+inexplicable y la búsqueda arrancaría en el lugar equivocado.
+
+## Identidad de usuario
+
+Cuando una persona entra por `/m/<codigo>`, CENTRIA agrega:
+
+| Header | Contenido |
+|---|---|
+| `x-user-id` | identificador estable |
+| `x-user-email` | correo |
+| `x-user-name` | nombre visible |
+| `x-module-role` | `ADMIN` o `USER`, **rol dentro de este módulo** |
+| `x-tenant-timezone` | zona del tenant |
+
+Estos headers **solo valen si el token de entrada validó**. Sin esa condición,
+cualquiera se declararía ADMIN escribiendo un header.
+
+`x-user-role` está deprecado y **no** equivale a `x-module-role`: es el rol en
+CENTRIA, no en el módulo. Este código no lo lee.
+
+## Manifiesto
+
+`GET /centria/manifiesto` declara dos cosas distintas: lo que el módulo
+necesita **leer** (`maestros`, desde v1) y lo que **publica** (`publica`,
+agregado en v2).
+
+```json
+{
+  "codigo": "turecibo",
+  "nombre": "Tu Recibo",
+  "version": "0.1.0",
+  "manifiestoVersion": 2,
+  "salud": "/centria/salud",
+  "maestros": [
+    { "id": "personas", "campos": ["externalId", "dni", "email", "fullName"], "motivo": "..." },
+    { "id": "tenant", "campos": ["tenantId", "timezone"], "motivo": "..." }
+  ],
+  "publica": [
+    {
+      "id": "ausencias",
+      "nombre": "Ausencias",
+      "clave": "externalId",
+      "version": 1,
+      "descripcion": "...",
+      "campos": [
+        { "id": "estado", "tipo": "lista", "sensibilidad": "comun" },
+        { "id": "dni", "tipo": "texto", "sensibilidad": "restringido" }
+      ],
+      "parametros": [{ "id": "ventanaDias", "tipo": "numero", "min": 1, "max": 400, "default": 31 }]
+    }
+  ]
+}
+```
+
+`publica` es **aditivo**: `maestros` no cambió de forma ni de significado, así
+que un CENTRIA que solo entienda v1 sigue leyendo el documento y se limita a
+ignorar el campo de más.
+
+- `tipo` de campo: `texto` | `numero` | `booleano` | `fecha` (AAAA-MM-DD) |
+  `fechaHora` (ISO) | `lista`.
+- `sensibilidad`: `comun` | `sensible` | `restringido`. `dni`, `cuil` y `motivo`
+  van como **restringido**.
+- `parametros` declara solo lo que **varía** entre maestros. `?campos=` y
+  `?desde=` no se declaran porque el contrato los define para todo maestro
+  publicado; `?ventanaDias=` sí, porque solo aplica a `ausencias`.
+- `parametros` se **omite** cuando no hay ninguno, en vez de mandar una lista
+  vacía que invitaría a dibujar una sección sin contenido.
+
+Ids y claves fijados por el contrato:
+
+| Maestro | Clave | Parámetros |
+|---|---|---|
+| `tipos-licencia` | `externalId` | — |
+| `ausencias` | `externalId` | `ventanaDias` (1–400, default 31) |
+| `feriados` | `fecha` | — |
+
+El manifiesto **no otorga acceso**: es un pedido. El SUPERADMIN lo aprueba campo
+por campo en `/admin/modules`. Hasta entonces, `leerMaestroDeCentria` recibe 403
+con el detalle de lo que falta habilitar. La sensibilidad declarada en `publica`
+es, del mismo modo, una propuesta que CENTRIA aprueba.
+
+## Salud
+
+`GET /centria/salud` con `x-internal-token` responde `200 { "ok": true }`. Path
+**confirmado por CENTRIA**. Valida solo el token de entrada: no exige tenant,
+porque un ping que dependiera de que el tenant exista reportaría caído al módulo
+por un problema de datos.
+
+## Publicación
+
+`GET /centria/maestros/<id>`, con `x-internal-token` y `x-tenant-id`, devuelve:
+
+```json
+{
+  "maestro": "ausencias",
+  "version": 1,
+  "actualizado": "2025-03-11T03:00:00.000Z",
+  "filas": [{ "externalId": "100", "estado": "APROBADA" }],
+  "bajas": []
+}
+```
+
+Es la **misma forma** que usan los maestros nativos de CENTRIA. Copiarla es
+deliberado: el relay filtra sobre esa forma y un consumidor no debería poder
+notar si un maestro es nativo o viene de un módulo.
+
+### Parámetros
+
+| Query | Efecto |
+|---|---|
+| `?campos=a,b` | subconjunto; la clave siempre viaja. Un campo fuera del catálogo da 400 |
+| `?desde=<ISO>` | solo lo que cambió desde entonces, más `bajas[]` |
+| `?ventanaDias=N` | ventana de publicación, solo para `ausencias`. Se acota al techo |
+
+CENTRIA **no manda la identidad del consumidor**, y el módulo no la espera ni la
+exige: quién puede ver qué se decide del lado de CENTRIA, por conexión.
+
+### Límites de respuesta
+
+50.000 filas, 10 MB, 8 s, sin redirects. Las dos primeras las valida el módulo
+antes de responder y, si se exceden, devuelve **413** con el conteo real y la
+sugerencia de acotar.
+
+Fallar es deliberado: una respuesta truncada es indistinguible de una completa,
+así que un consumidor concluiría que las personas faltantes no tuvieron
+ausencias. Un silencio que parece un dato es peor que un error visible.
+
+### Dos cosas que no son obvias
+
+**`version` es del esquema, no de los datos.** Se incrementa solo cuando se
+agrega, saca o renombra un campo. Si fuera un contador de corrida, cada sync
+invalidaría el parser de todos los consumidores. Para saber si hay datos nuevos
+está `actualizado`.
+
+**`bajas[]` sale solo con `?desde=`.** En una lectura completa, la ausencia de
+la fila ya es la baja; mandar además la lista de todo lo que alguna vez existió
+filtraría el historial entero a quien solo pidió el estado actual.
+
+### `actualizado` y el sello
+
+Sale de `SelloMaestro`, que se escribe en cada corrida exitosa **aunque no haya
+cambiado nada**. Sin eso, "la última corrida no encontró novedades" y "hace tres
+días que no sincronizamos" se verían idénticos desde afuera.
+
+## Ventana de publicación
+
+**Quién resuelve `ventanaDias`, resuelto:** lo aplica el módulo, pero CENTRIA
+**siempre manda el valor ya resuelto** —lo pedido o el default, topado por el
+`ventanaDiasMax` de la conexión—. El default del módulo
+(`PUBLICACION_AUSENCIAS_DIAS`) solo entra en juego si no llega nada, y el techo
+(`PUBLICACION_AUSENCIAS_DIAS_MAX`) queda como red de seguridad, no como el
+límite de negocio.
+
+Por eso el módulo no necesita conocer al consumidor: la política vive en la
+conexión de CENTRIA y llega ya reducida a un número.
+
+La ventana mira `hasta`, no `desde`: una licencia larga que empezó antes del
+corte y sigue vigente tiene que publicarse. Con `desde >= corte` desaparecería
+justo mientras la persona está ausente.
+
+## Estado de las ausencias
+
+`estado` viaja en **mayúsculas**: `SOLICITADA` | `APROBADA` | `RECHAZADA`. Se
+declara como campo de tipo `lista`.
+
+## Dependencia abierta
+
+Ninguna en el contrato. CENTRIA lo cerró en
+`docs/centria/contrato-maestros.md` (PR #129): forma del manifiesto y de la
+publicación, ids y claves, límites, resolución de `ventanaDias`, ausencia de
+identidad del consumidor y path del ping.
+
+Queda pendiente lo **operativo**, no lo contractual: el relay
+(`GET /centria/maestros/<id>` del lado de CENTRIA, etapa 6) tiene que estar
+desplegado y el módulo registrado en `/admin/modules` para que alguien consuma
+esto. Ver el gate G1 en `RUNBOOK.md`.

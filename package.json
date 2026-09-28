@@ -1,0 +1,40 @@
+{
+  "name": "turecibo-modulo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Módulo SparkGY dueño de la extracción de Tu Recibo. Publica tipos de licencia, ausencias y feriados como maestros de CENTRIA.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "prisma generate",
+    "db:deploy": "prisma migrate deploy",
+    "db:migrate": "prisma migrate dev",
+    "feriados:robot": "node scripts/feriados-robot.mjs"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.6",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "eslint": "8.57.1",
+    "eslint-config-next": "^14.2.35",
+    "playwright": "1.48.2",
+    "prisma": "5.22.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}

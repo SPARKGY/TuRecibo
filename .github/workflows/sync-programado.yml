@@ -1,0 +1,70 @@
+name: Sync programado
+
+# El disparador de la extracción. Vive acá y no dentro del App Service por una
+# razón operativa: un timer interno al contenedor se dispara tantas veces como
+# instancias haya, y en un scale-out silencioso eso significa varias corridas
+# simultáneas contra Tu Recibo con las mismas credenciales.
+#
+# Acá hay un solo reloj y queda registro de cada corrida.
+
+on:
+  schedule:
+    # 06:15 UTC ≈ 03:15 en Argentina. Fuera del horario de uso, y con margen
+    # para que alguien mire el resultado a la mañana.
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant puntual. Vacío = todos los activos."
+        required: false
+        type: string
+
+# Dos corridas en paralelo se pisarían: la segunda leería la base a mitad de la
+# reconciliación de la primera y calcularía bajas que no son.
+concurrency:
+  group: sync-turecibo
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    environment: produccion
+    steps:
+      - name: Disparar la corrida
+        env:
+          MODULO_BASE_URL: ${{ vars.MODULO_BASE_URL }}
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          TENANT: ${{ inputs.tenant }}
+        run: |
+          set -euo pipefail
+
+          cuerpo='{}'
+          if [ -n "${TENANT:-}" ]; then
+            cuerpo=$(printf '{"tenantId":"%s"}' "$TENANT")
+          fi
+
+          codigo=$(curl -sS -o respuesta.json -w '%{http_code}' \
+            -X POST "${MODULO_BASE_URL%/}/api/sync/programado" \
+            -H 'content-type: application/json' \
+            -H "x-sync-token: ${SYNC_TOKEN}" \
+            --max-time 600 \
+            -d "$cuerpo")
+
+          echo "HTTP $codigo"
+          cat respuesta.json
+
+          # 207 significa que algún tenant o alguna fuente falló y el resto
+          # siguió. Es una falla real: si se dejara pasar como éxito, un tenant
+          # podría quedar sin sincronizar durante semanas sin que nadie lo note.
+          if [ "$codigo" != "200" ]; then
+            echo "::error::La corrida no terminó limpia (HTTP $codigo)."
+            exit 1
+          fi
+
+      - name: Guardar el resultado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corrida-sync
+          path: respuesta.json
+          if-no-files-found: ignore

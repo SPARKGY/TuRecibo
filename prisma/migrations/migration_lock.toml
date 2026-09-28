@@ -1,0 +1,2 @@
+# Lo lee Prisma para no aplicar migraciones de un motor contra otro.
+provider = "postgresql"
