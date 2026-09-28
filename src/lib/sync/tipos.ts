@@ -8,7 +8,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { traerTiposLicencia, login, type TipoLicenciaCrudo } from "@/lib/turecibo/cliente";
+import { traerTiposLicencia, login, TuReciboError, type TipoLicenciaCrudo } from "@/lib/turecibo/cliente";
 import { resolverCredenciales } from "@/lib/turecibo/credenciales";
 import { esVerdadero } from "@/lib/turecibo/normalizar";
 import { CorridaAbortada, conteosVacios, ejecutarCorrida, sellarMaestro, type Conteos } from "@/lib/sync/corrida";
@@ -23,19 +23,19 @@ export function planificarTipos(
 
   const altas: { externalId: string; nombre: string; visible: boolean; esVacaciones: boolean }[] = [];
   const cambios: { externalId: string; nombre: string; visible: boolean; esVacaciones: boolean }[] = [];
-  let descartadas = 0;
-
   for (const crudo of crudos) {
-    const externalId = crudo.id.trim();
-    if (!externalId || !crudo.nombre.trim()) {
-      descartadas++;
-      continue;
+    const externalId = crudo?.id?.trim();
+    const nombre = crudo?.nombre?.trim();
+    if (!externalId || !nombre) {
+      throw new TuReciboError(
+        "El catálogo de tipos trae una fila sin id o nombre. Se aborta antes de reconciliar para no dar de baja tipos vigentes.",
+      );
     }
     vistos.add(externalId);
 
     const deseado = {
       externalId,
-      nombre: crudo.nombre.trim(),
+      nombre,
       visible: esVerdadero(crudo.visible),
       esVacaciones: crudo.isVacation === true,
     };
@@ -54,7 +54,7 @@ export function planificarTipos(
   }
 
   const bajas = existentes.filter((e) => e.activo && !vistos.has(e.externalId)).map((e) => e.externalId);
-  return { altas, cambios, bajas, descartadas };
+  return { altas, cambios, bajas, descartadas: 0 };
 }
 
 export async function sincronizarTipos(tenantId: string, manual: boolean) {

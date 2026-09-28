@@ -104,10 +104,14 @@ export async function traerTiposLicencia(cred: Credenciales, jwt: string): Promi
   }
 
   const tipos: TipoLicenciaCrudo[] = [];
-  for (const crudo of cuerpo.data as Record<string, unknown>[]) {
+  for (const crudo of cuerpo.data as (Record<string, unknown> | null)[]) {
     const id = crudo?.id == null ? "" : String(crudo.id).trim();
     const nombre = crudo?.nombre == null ? "" : String(crudo.nombre).trim();
-    if (!id || !nombre) continue;
+    if (!id || !nombre) {
+      throw new TuReciboError(
+        "El catálogo de tipos trae una fila sin id o nombre. Se aborta antes de reconciliar para no dar de baja tipos vigentes.",
+      );
+    }
     tipos.push({
       id,
       nombre,

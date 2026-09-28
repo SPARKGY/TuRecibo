@@ -153,8 +153,12 @@ lo último bueno. Lo que envejece es `actualizado`, que es justamente la señal.
 
 ### La corrida quedó `FALLIDA`
 
-Error real: red, credenciales, base. El mensaje está en `CorridaSync.error`. El
-workflow devuelve rojo. Se reintenta a mano una vez entendida la causa.
+Error real: red, credenciales, base o una fila corrupta en el catálogo de tipos
+(sin id o nombre). En este último caso la corrida se corta antes de reconciliar:
+no se desactivan tipos por haber descartado filas del origen. El mensaje está
+en `CorridaSync.error`. El workflow programado devuelve rojo, pero no existe
+una notificación operativa dedicada; hay que vigilar los fallos de GitHub
+Actions. Se reintenta a mano una vez entendida la causa.
 
 ### HTTP 207 en el sync programado
 
