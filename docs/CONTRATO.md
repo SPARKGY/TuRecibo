@@ -249,6 +249,54 @@ El punto puede cerrarse con evidencia —no con criterio— cuando el módulo es
 sincronizando: mirando la distribución real de `medioDia: true` con
 `desde != hasta`.
 
+## Correcciones manuales de feriados: `desdeOverride`
+
+El maestro `feriados` publica `desdeOverride`, y su significado es más amplio
+que el que sugiere el nombre:
+
+> **El valor vigente de esta fila fue tocado por una corrección manual del
+> módulo.**
+
+Eso cubre dos casos que el campo **no distingue**:
+
+- **ALTA** — fecha que el origen no trajo y se agregó a mano.
+- **CAMBIO** — fecha que **sí vino** del origen, con `tipo` o `descripcion`
+  corregidos.
+
+De ahí la lectura que hay que evitar: `desdeOverride: true` **no** significa
+"este día no vino de Tu Recibo". Mostrarlo en pantalla como "cargado a mano, no
+viene del origen" sería falso en todos los CAMBIO. La redacción segura es "fue
+ajustado manualmente".
+
+El campo que sí separa ambos casos es `enOrigen` (con `tipoOrigen` y
+`descripcionOrigen` como espejo crudo). **Hoy no se publica**: existe en la base
+pero ningún consumidor lo necesita. Si alguno lo pide, agregarlo al catálogo es
+un cambio chico —hay que incrementar `MAESTROS_VERSION`— y habilita los tres
+estados: sin tocar, corregido, agregado.
+
+`desdeOverride` es **explicativo, no funcional**: no cambia si el día bloquea.
+
+### El caso BAJA no viaja como fila
+
+Existe una tercera corrección: eliminar un feriado que el origen sí trae. Esos
+días **no aparecen en `filas[]`** —son indistinguibles de un día hábil
+cualquiera, que es el resultado buscado—.
+
+La consecuencia importa solo para consumidores con caché incremental: la baja
+llega en **`bajas[]`**, y `bajas[]` sale **solo con `?desde=`**. Ignorar ese
+arreglo deja bloqueado un día que dejó de ser feriado.
+
+### Las capas de override se apilan
+
+Un consumidor puede tener su propia capa de feriados propios y anulados sobre lo
+que recibe por el enchufe (Timesheet la tiene). Se componen sin conflicto porque
+la local se aplica después: un feriado corregido acá y anulado allá **queda
+anulado**.
+
+Se deja escrito para desarmar el supuesto inverso: publicar una corrección **no
+garantiza** que se vea en todos los consumidores. La última palabra sobre su
+propio calendario la tiene cada uno.
+
 ## Dependencia abierta
 
 Ninguna en el contrato. CENTRIA lo cerró en
