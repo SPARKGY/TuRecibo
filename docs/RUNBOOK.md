@@ -215,6 +215,12 @@ Casi siempre es la sesión PHP. El robot navega a `/gestion.licencias` después
 del login porque **ese `goto` es el que dispara el SSO**; sin él, el POST
 responde como anónimo con una lista vacía.
 
+El formulario puede cambiar sus nombres de campo: el robot selecciona dentro
+del formulario visible por tipo de input, incluso si está en un iframe. Si
+falla antes de raspar, el workflow adjunta una captura saneada en
+`feriados-fallido` (sin campos, texto ni iframes); no se reintenta el login
+automáticamente.
+
 El robot aborta ante un año vacío y no envía nada. Si el panel cambió, hay que
 ajustar el selector; mientras tanto, los feriados se pueden cargar con overrides
 `ALTA`, que es exactamente para lo que sirven.

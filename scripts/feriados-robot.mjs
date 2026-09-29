@@ -21,6 +21,7 @@
  * modo destructivo se escribe, no se olvida.
  */
 
+import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
 
 const args = process.argv.slice(2);
@@ -49,6 +50,40 @@ function abortar(mensaje) {
   process.exit(1);
 }
 
+async function formularioLogin(page) {
+  const limite = Date.now() + 30_000;
+  while (Date.now() < limite) {
+    for (const frame of page.frames()) {
+      const form = frame.locator('form:has(input[type="password"])');
+      if (await form.count() !== 1 || !(await form.isVisible())) continue;
+      const usuario = form.locator('input:not([type]), input[type="text"], input[type="email"]');
+      const clave = form.locator('input[type="password"]');
+      const submit = form.locator('button[type="submit"], input[type="submit"], button:not([type])');
+      if (await usuario.count() === 1 && await clave.count() === 1 && await submit.count() === 1) {
+        return { usuario, clave, submit };
+      }
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error("No apareció un formulario de login con usuario, contraseña y submit únicos.");
+}
+
+async function capturarFallo(page) {
+  await page.evaluate(() => {
+    document.querySelectorAll("input, textarea, img, svg, canvas, video, iframe").forEach((element) => element.remove());
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let text;
+    while ((text = walker.nextNode())) {
+      if (text.textContent.trim()) text.textContent = "[texto oculto]";
+    }
+    const style = document.createElement("style");
+    style.textContent = "* { background-image: none !important } *::before, *::after { content: none !important }";
+    document.head.append(style);
+  });
+  await mkdir("test-results", { recursive: true });
+  await page.screenshot({ path: "test-results/feriados-fallo-saneado.png", fullPage: true });
+}
+
 if (!TENANT) abortar("Falta --tenant.");
 if (ANIOS.length === 0) abortar("Falta --anios (ej: --anios 2025,2026).");
 if (!USUARIO || !CLAVE) abortar("Faltan TURECIBO_USER y/o TURECIBO_PASSWORD.");
@@ -61,15 +96,19 @@ async function raspar() {
 
   try {
     await page.goto(`${ADMIN_URL}/s/login`, { waitUntil: "domcontentloaded" });
-    await page.fill('input[name="user"]', USUARIO);
-    await page.fill('input[name="password"]', CLAVE);
-    await page.click('button[type="submit"], input[type="submit"]');
+    const form = await formularioLogin(page);
+    await form.usuario.fill(USUARIO);
+    await form.clave.fill(CLAVE);
+    await form.submit.click();
     await page.waitForLoadState("networkidle");
 
     // Este `goto` no es decorativo: es el que dispara el SSO que establece la
     // sesión PHP. Sin pasar por acá, el POST de abajo responde como anónimo y
     // devuelve una lista vacía, que es indistinguible de "no hay feriados".
     await page.goto(`${ADMIN_URL}/gestion.licencias`, { waitUntil: "networkidle" });
+    if (new URL(page.url()).pathname === "/s/login") {
+      throw new Error("El panel volvió al login; no se estableció la sesión.");
+    }
 
     const feriados = [];
 
@@ -97,13 +136,13 @@ async function raspar() {
         { base: ADMIN_URL, anio },
       );
 
-      if (crudo?.error) abortar(`El panel devolvió ${crudo.error} para ${anio}.`);
+      if (crudo?.error) throw new Error(`El panel devolvió ${crudo.error} para ${anio}.`);
 
       const filas = Array.isArray(crudo?.data) ? crudo.data : [];
       // Un año entero vacío casi siempre significa que la sesión se cayó, no que
       // no haya feriados. Cortar acá evita mandar una carga que daría de baja el
       // calendario completo de ese año.
-      if (filas.length === 0) abortar(`El panel no devolvió feriados para ${anio}. Se aborta sin enviar nada.`);
+      if (filas.length === 0) throw new Error(`El panel no devolvió feriados para ${anio}. Se aborta sin enviar nada.`);
 
       for (const f of filas) {
         feriados.push({
@@ -117,6 +156,13 @@ async function raspar() {
     }
 
     return feriados;
+  } catch (error) {
+    try {
+      await capturarFallo(page);
+    } catch (capturaError) {
+      console.error(`[feriados-robot] No se pudo guardar la captura saneada: ${capturaError.message}`);
+    }
+    throw error;
   } finally {
     await browser.close();
   }
