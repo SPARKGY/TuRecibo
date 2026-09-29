@@ -20,9 +20,20 @@ export class CentriaError extends Error {}
 export const MAESTROS_QUE_NECESITAMOS = [
   {
     id: "personas",
-    campos: ["externalId", "dni", "email", "fullName"],
+    campos: ["externalId", "dni"],
     motivo:
       "Resolver la identidad de cada ausencia. Tu Recibo solo devuelve CUIL, y el DNI que se deriva de él es el único puente con la nómina.",
+    usos: [
+      { campo: "dni", comoLoLlama: "DNI", para: "Cruzar el DNI derivado del CUIL de Tu Recibo con la nómina." },
+    ],
+    relaciones: [
+      {
+        campo: "dni",
+        tipo: "resuelve",
+        hacia: "ausencias.personaExternalId",
+        para: "Resolver personaExternalId mediante el DNI derivado del CUIL de Tu Recibo.",
+      },
+    ],
   },
   {
     id: "tenant",

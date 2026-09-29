@@ -24,7 +24,13 @@ describe("compatibilidad con v1", () => {
   it("sigue declarando `personas`, que es de lo que depende el cruce", () => {
     const personas = manifiesto.maestros.find((m) => m.id === "personas");
     expect(personas).toBeDefined();
-    expect(personas!.campos).toContain("dni");
+    expect(personas!.campos).toEqual(["externalId", "dni"]);
+    expect(personas!.usos).toEqual([
+      expect.objectContaining({ campo: "dni", comoLoLlama: "DNI" }),
+    ]);
+    expect(personas!.relaciones).toEqual([
+      expect.objectContaining({ campo: "dni", tipo: "resuelve", hacia: "ausencias.personaExternalId" }),
+    ]);
   });
 
   it("la identidad del módulo no cambió de lugar", () => {
@@ -35,6 +41,18 @@ describe("compatibilidad con v1", () => {
 });
 
 describe("sección publica", () => {
+  it("declara relaciones de ausencias a personas y tipos sin cambiar la versión del esquema", () => {
+    const ausencias = porId.get("ausencias")!;
+    expect(ausencias.relaciones).toEqual([
+      { campo: "personaExternalId", refiere: "personas.externalId" },
+      { campo: "tipoExternalId", refiere: "tipos-licencia.externalId" },
+    ]);
+    expect(ausencias.version).toBe(VERSIONES.ausencias);
+    for (const relacion of ausencias.relaciones!) {
+      expect(ausencias.campos.map((campo) => campo.id)).toContain(relacion.campo);
+    }
+    expect(porId.get("feriados")!.relaciones).toBeUndefined();
+  });
   it("declara exactamente los maestros que el módulo sabe servir", () => {
     // Si el manifiesto ofreciera uno que `buscarMaestro` no conoce, CENTRIA
     // mostraría una conexión posible que después da 404.

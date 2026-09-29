@@ -21,7 +21,7 @@
  * conecte nada.
  */
 
-import { MAESTROS, type CampoMaestro, type Maestro } from "@/lib/maestros";
+import { MAESTROS, type CampoMaestro, type Maestro, type RelacionPublicada } from "@/lib/maestros";
 import { MAESTROS_QUE_NECESITAMOS } from "@/lib/centria-cliente";
 import { CODIGO_MODULO, NOMBRE_MODULO, VERSION_MODULO } from "@/lib/env";
 
@@ -47,6 +47,7 @@ export type MaestroPublicado = {
   version: number;
   descripcion?: string;
   campos: CampoPublicado[];
+  relaciones?: RelacionPublicada[];
   /**
    * Parámetros de query configurables por conexión.
    *
@@ -69,6 +70,9 @@ function publicar(maestro: Maestro): MaestroPublicado {
 
   if (maestro.parametros?.length) {
     publicado.parametros = maestro.parametros.map((p) => ({ ...p }));
+  }
+  if (maestro.relaciones?.length) {
+    publicado.relaciones = maestro.relaciones.map((relacion) => ({ ...relacion }));
   }
 
   return publicado;

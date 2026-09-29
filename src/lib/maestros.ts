@@ -29,6 +29,12 @@ export type CampoMaestro = {
   descripcion?: string;
 };
 
+export type RelacionPublicada = {
+  campo: string;
+  refiere: string;
+  para?: string;
+};
+
 /**
  * Parámetro de query que este maestro acepta y que CENTRIA ofrece configurar
  * por conexión.
@@ -59,6 +65,7 @@ export type Maestro = {
   /** De dónde sale el dato, para qué sirve y qué significa que desaparezca. */
   descripcion: string;
   campos: readonly CampoMaestro[];
+  relaciones?: readonly RelacionPublicada[];
   /** Ausente si el maestro no acepta parámetros más allá de los universales. */
   parametros?: readonly ParametroMaestro[];
 };
@@ -168,6 +175,10 @@ export const MAESTROS: readonly Maestro[] = [
       campo("dni", "texto", "restringido"),
       campo("cuil", "texto", "restringido"),
       campo("motivo", "texto", "restringido"),
+    ],
+    relaciones: [
+      { campo: "personaExternalId", refiere: "personas.externalId" },
+      { campo: "tipoExternalId", refiere: "tipos-licencia.externalId" },
     ],
   },
   {
