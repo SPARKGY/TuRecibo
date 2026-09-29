@@ -26,11 +26,6 @@ on:
         required: false
         default: false
         type: boolean
-      diagnostico:
-        description: "Solo inspeccionar /s/login sin autenticacion ni ingesta."
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: feriados-turecibo
@@ -38,7 +33,7 @@ concurrency:
 
 jobs:
   raspar:
-    if: inputs.diagnostico != true && (github.event_name != 'schedule' || vars.ENABLE_TURECIBO_SCHEDULE == 'true')
+    if: github.event_name != 'schedule' || vars.ENABLE_TURECIBO_SCHEDULE == 'true'
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -97,23 +92,3 @@ jobs:
           path: |
             test-results/
           if-no-files-found: ignore
-
-  inspeccionar-login:
-    if: github.event_name == 'workflow_dispatch' && inputs.diagnostico == true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - name: Inspeccionar solo el login publico sin secretos
-        run: node scripts/diagnostico-login.mjs
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: login-no-auth-saneado
-          path: test-results/login-no-auth/captura-saneada.png
-          if-no-files-found: error
