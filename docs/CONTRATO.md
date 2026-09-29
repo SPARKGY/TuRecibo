@@ -71,7 +71,13 @@ agregado en v2).
   "manifiestoVersion": 2,
   "salud": "/centria/salud",
   "maestros": [
-    { "id": "personas", "campos": ["externalId", "dni", "email", "fullName"], "motivo": "..." },
+    {
+      "id": "personas",
+      "campos": ["externalId", "dni"],
+      "motivo": "...",
+      "usos": [{ "campo": "dni", "comoLoLlama": "DNI", "para": "Cruzar el DNI derivado del CUIL de Tu Recibo con la nómina." }],
+      "relaciones": [{ "campo": "dni", "tipo": "resuelve", "hacia": "ausencias.personaExternalId", "para": "Resolver personaExternalId mediante el DNI derivado del CUIL de Tu Recibo." }]
+    },
     { "id": "tenant", "campos": ["tenantId", "timezone"], "motivo": "..." }
   ],
   "publica": [
@@ -85,6 +91,10 @@ agregado en v2).
         { "id": "estado", "tipo": "texto", "sensibilidad": "comun", "descripcion": "Valores: SOLICITADA | APROBADA | RECHAZADA." },
         { "id": "dni", "tipo": "texto", "sensibilidad": "restringido" }
       ],
+      "relaciones": [
+        { "campo": "personaExternalId", "refiere": "personas.externalId" },
+        { "campo": "tipoExternalId", "refiere": "tipos-licencia.externalId" }
+      ],
       "parametros": [{ "id": "ventanaDias", "tipo": "numero", "min": 1, "max": 400, "default": 31 }]
     }
   ]
@@ -94,6 +104,16 @@ agregado en v2).
 `publica` es **aditivo**: `maestros` no cambió de forma ni de significado, así
 que un CENTRIA que solo entienda v1 sigue leyendo el documento y se limita a
 ignorar el campo de más.
+
+`usos` y `relaciones` son anotaciones opcionales del contrato D-63. En
+`maestros`, el uso de `personas.dni` indica cómo se cruza con la nómina y
+`tipo: "resuelve"` indica que ese dato permite completar
+`ausencias.personaExternalId`. En `publica`, las relaciones nombran las claves
+foráneas de ausencias. No amplían los permisos de la conexión, ni alteran la
+forma de las filas; por eso `ausencias.version` permanece en 1. CENTRIA
+staging puede ignorarlas hasta desplegar D-63; después, el SUPERADMIN debe
+releer el manifiesto y aprobar la propuesta en `/admin/maestros` para que
+aparezcan en el catálogo.
 
 - `tipo` de campo: `texto` | `numero` | `booleano` | `fecha` (AAAA-MM-DD) |
   `fechaHora` (ISO) | `lista`. **Este módulo no usa `lista`**: todos sus campos
