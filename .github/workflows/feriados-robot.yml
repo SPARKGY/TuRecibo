@@ -8,10 +8,9 @@ name: Robot de feriados
 # sistema que no es nuestro.
 
 on:
-  # Reactivar en G6, tras infraestructura, secretos y primera corrida manual verificada:
-  # schedule:
-  #   # Lunes 07:00 UTC ≈ 04:00 en Argentina.
-  #   - cron: "0 7 * * 1"
+  schedule:
+    # Lunes 07:00 UTC ≈ 04:00 en Argentina. Solo staging, tras el gate de corridas manuales.
+    - cron: "0 7 * * 1"
   workflow_dispatch:
     inputs:
       tenant:
@@ -34,8 +33,9 @@ concurrency:
 
 jobs:
   raspar:
+    if: github.event_name != 'schedule' || vars.ENABLE_TURECIBO_SCHEDULE == 'true'
     runs-on: ubuntu-latest
-    environment: produccion
+    environment: staging
     steps:
       - uses: actions/checkout@v4
 

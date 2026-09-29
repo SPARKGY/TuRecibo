@@ -1,9 +1,49 @@
 # Runbook
 
-## Estado: nada desplegado
+## Staging compartido
 
-Al cierre de esta etapa, el módulo está **implementado y verificado localmente**
-(typecheck, lint, 57 tests, build) y **nada más**. Concretamente:
+El sitio de staging `turecibo-modulo-staging.azurewebsites.net` usa
+`asp-ignix-staging`, una imagen versionada en `ignixacrprod` y la base aislada
+`turecibo_staging` en `psql-ignix-prod`. Su configuración de App Service está
+en `infra/staging.bicep`: **no** ejecutar `infra/main.bicep` para staging,
+porque crea otra infraestructura. `CENTRIA_BASE_URL` (leída por el módulo) y
+`CENTRIA_URL` apuntan ambas a CENTRIA staging. `/` sirve de health público;
+`/centria/salud` requiere el token de entrada. Los cron apuntan al environment
+GitHub `staging` y sus jobs programados solo corren si
+`ENABLE_TURECIBO_SCHEDULE=true` como variable de **repositorio** (el `if` de
+un job se evalúa antes de que estén disponibles las variables del environment);
+`workflow_dispatch` sigue disponible con el gate apagado. Encenderlo solo
+después de comprobar por separado sync manual, robot dry-run y robot con
+ingesta en staging. Los tokens y credenciales usados por los jobs están en
+los secrets del environment `staging`.
+
+**Riesgos aceptados para staging:**
+
+- `kv-ignix-prod` usa *access policies*. La identidad del sitio tiene solo
+  permiso `get` (sin `list`), pero ese permiso alcanza **todos** los secretos
+  del vault, incluidos los de producción; no se puede limitar a los tres
+  secretos de este módulo en ese modo. Pendiente: vault de staging separado o
+  RBAC a nivel de secreto. Las credenciales CENTRIA de staging se obtuvieron
+  tras el alta del módulo y sustituyeron los placeholders iniciales.
+- En el PostgreSQL compartido, `ignix` y `postgres` conservan `PUBLIC CONNECT`,
+  al igual que en el despliegue de Timesheet staging. El rol
+  `turecibo_staging_app` puede establecer conexión con esas dos bases, pero
+  no puede crear objetos en `public` ni leer una tabla de usuario de `ignix`;
+  `postgres` no tenía tablas de usuario al verificar. No conecta a
+  `centria_staging`, `timesheet_staging`, `timesheet_next_staging` ni
+  `kairos_staging`. No se tocaron permisos de otras bases. Para aislamiento
+  estricto de conexión haría falta un servidor propio o revisar las ACL
+  existentes con sus responsables.
+
+La regla temporal de firewall `turecibo-staging-setup-20260929-tmp` queda
+neutralizada en `0.0.0.1–0.0.0.1`: el RG tiene bloqueo `DoNotDelete` y no se
+intenta eliminarla.
+
+## Estado inicial antes del despliegue de staging
+
+Antes del despliegue de staging, el módulo estaba **implementado y verificado
+localmente** y nada más. Este inventario corresponde a aquel momento, no al
+estado actual de staging:
 
 - No se creó ningún recurso en Azure.
 - No se desplegó nada.
@@ -117,10 +157,11 @@ Verificar contra lo que hoy tiene KAiROS antes de que nadie consuma
 
 ### G6 — Cron y consumidores
 
-Recién acá, después de infraestructura, secretos y primera corrida manual
-verificada, se descomentan los bloques `schedule` de ambos workflows y se crea
-la conexión de Timesheet en CENTRIA. Hasta entonces solo está disponible
-`workflow_dispatch`; mergear a `main` no inicia extracciones programadas.
+En staging, después de infraestructura, secretos y corridas manuales
+verificadas, se cambia la variable de repositorio
+`ENABLE_TURECIBO_SCHEDULE` de `false` a `true`. Antes de eso, el evento `schedule` queda
+sin job y `workflow_dispatch` permite ensayos controlados. No usar secretos
+ni environment de producción.
 
 ## Operación diaria
 

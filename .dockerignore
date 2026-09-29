@@ -9,6 +9,7 @@ out
 .git
 .github
 .gitignore
+.copilot-azure
 
 .env
 .env.*
