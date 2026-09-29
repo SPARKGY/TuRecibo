@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   raspar:
-    if: github.event_name != 'schedule' || vars.ENABLE_TURECIBO_SCHEDULE == 'true'
+    if: github.event_name != 'schedule' || vars.ENABLE_FERIADOS_SCHEDULE == 'true'
     runs-on: ubuntu-latest
     environment: staging
     steps:

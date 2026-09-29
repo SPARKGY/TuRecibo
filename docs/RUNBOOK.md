@@ -9,13 +9,15 @@ en `infra/staging.bicep`: **no** ejecutar `infra/main.bicep` para staging,
 porque crea otra infraestructura. `CENTRIA_BASE_URL` (leída por el módulo) y
 `CENTRIA_URL` apuntan ambas a CENTRIA staging. `/` sirve de health público;
 `/centria/salud` requiere el token de entrada. Los cron apuntan al environment
-GitHub `staging` y sus jobs programados solo corren si
-`ENABLE_TURECIBO_SCHEDULE=true` como variable de **repositorio** (el `if` de
-un job se evalúa antes de que estén disponibles las variables del environment);
-`workflow_dispatch` sigue disponible con el gate apagado. Encenderlo solo
-después de comprobar por separado sync manual, robot dry-run y robot con
-ingesta en staging. Los tokens y credenciales usados por los jobs están en
-los secrets del environment `staging`.
+GitHub `staging` y tienen gates separados como variables de **repositorio**:
+`ENABLE_SYNC_SCHEDULE` para tipos y ausencias y `ENABLE_FERIADOS_SCHEDULE`
+para el robot (el `if` de un job se evalúa antes de que estén disponibles
+las variables del environment). Si falta una variable o vale `false`, el
+respectivo job programado se omite; `workflow_dispatch` sigue disponible
+para pruebas controladas. El robot puede habilitarse tras su ingesta manual
+verificada, pero el sync debe permanecer apagado mientras Tu Recibo devuelva
+403 para tipos y ausencias. Los tokens y credenciales usados por los jobs
+están en los secrets del environment `staging`.
 
 **Riesgos aceptados para staging:**
 
@@ -157,18 +159,21 @@ Verificar contra lo que hoy tiene KAiROS antes de que nadie consuma
 
 ### G6 — Cron y consumidores
 
-En staging, después de infraestructura, secretos y corridas manuales
-verificadas, se cambia la variable de repositorio
-`ENABLE_TURECIBO_SCHEDULE` de `false` a `true`. Antes de eso, el evento `schedule` queda
-sin job y `workflow_dispatch` permite ensayos controlados. No usar secretos
-ni environment de producción.
+En staging, después de infraestructura, secretos y una ingesta manual de
+feriados verificada por el módulo y CENTRIA, cambiar la variable de
+repositorio `ENABLE_FERIADOS_SCHEDULE` a `true`. Mantener
+`ENABLE_SYNC_SCHEDULE=false` hasta resolver el 403 de tipos y ausencias
+con el proveedor y verificar una corrida manual de sync; **no** habilitar
+ambos mediante un gate compartido. Si un gate queda apagado, el evento
+`schedule` de ese workflow no ejecuta el job. `workflow_dispatch` permite
+ensayos controlados. No usar secretos ni environment de producción.
 
 ## Operación diaria
 
 | Qué | Cuándo | Dónde |
 |---|---|---|
-| Sync de tipos y ausencias (desde G6) | 06:15 UTC | `.github/workflows/sync-programado.yml` |
-| Robot de feriados (desde G6) | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
+| Sync de tipos y ausencias (pendiente resolver 403 y habilitar su gate) | 06:15 UTC | `.github/workflows/sync-programado.yml` |
+| Robot de feriados (tras habilitar su gate) | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
 
 Ambos tienen `workflow_dispatch` para correr a mano. El robot es dry-run salvo
 que se tilde `enviar` (una vez habilitado el cron, siempre ingesta).
