@@ -119,8 +119,16 @@ chequeo — significa que el engine cargó y llegó a intentar la conexión.
 npx prisma migrate deploy
 ```
 
-Después, cargar una fila en `CredencialTuRecibo` por tenant. Guarda **nombres**
-de variable, no valores:
+Después, configurar las conexiones de cada tenant desde el panel del módulo
+(ver [Conexiones a Tu Recibo](#conexiones-a-tu-recibo)). La migración
+`1_conexiones_parametricas` ya copia cada fila existente de
+`CredencialTuRecibo` a dos conexiones (`LICENCIAS_API` y `FERIADOS_PANEL`) en
+modo `USUARIO_PASSWORD`, que siguen leyendo las mismas variables de entorno
+hasta la primera rotación.
+
+**Fallback heredado.** Un tenant sin fila en `ConexionTuRecibo` se resuelve
+como antes: una fila en `CredencialTuRecibo` con **nombres** de variable, no
+valores:
 
 | Columna | Ejemplo |
 |---|---|
@@ -130,9 +138,6 @@ de variable, no valores:
 | `usuarioEnv` | `TURECIBO_USER` |
 | `passwordEnv` | `TURECIBO_PASSWORD` |
 | `activa` | `true` |
-
-Para un segundo tenant se agregan variables nuevas al vault
-(`TURECIBO_USER_ACME`, etc.) y se las nombra en su fila.
 
 ### G4 — Registro en CENTRIA
 
@@ -249,6 +254,92 @@ direcciones opuestas ([`CONTRATO.md`](CONTRATO.md#los-dos-secretos)). Si la
 variable está puesta y aun así da 500, probablemente sea una referencia de Key
 Vault sin resolver: llega como texto literal y el módulo la trata como no
 configurada, a propósito.
+
+## Conexiones a Tu Recibo
+
+Cada tenant tiene hasta dos conexiones en `ConexionTuRecibo`, una por fuente:
+
+| Fuente | Quién la usa | Modos |
+|---|---|---|
+| `LICENCIAS_API` | sync de tipos y ausencias (App Service) | `USUARIO_PASSWORD` (login → JWT), `TOKEN` (bearer ya emitido) |
+| `FERIADOS_PANEL` | robot de feriados (GitHub Actions) | `USUARIO_PASSWORD` (login con navegador), `SESION` (cookie PHP inyectada, sin login) |
+
+Parámetros (validados con zod): `baseUrl` para la API; `adminUrl`, `anios`
+(opcional; vacío = actual y siguiente) y `nombreCookieSesion` (default
+`PHPSESSID`) para el panel.
+
+**Secretos.** La base guarda solo nombres. Los valores viven en Key Vault con
+nombre determinístico `{KEY_VAULT_PREFIJO}-{tenant}-{fuente}-{campo}` (ej.
+`turecibo-acme-feriados-panel-sesion`). El módulo los lee y escribe en runtime
+con su identidad administrada (`KEY_VAULT_URL`), con caché en memoria de 60 s
+que se invalida al rotar. Las filas migradas guardan `secretosEnv` (nombres de
+variable) hasta la primera rotación desde el panel.
+
+### Rotar desde el panel
+
+En la página del módulo (solo rol ADMIN del módulo según `x-module-role`),
+tarjeta de la fuente → **Cambiar credenciales**:
+
+1. Elegir modo y parámetros; cargar los valores nuevos. Los campos vacíos
+   conservan el valor vigente si el modo no cambia.
+2. **Probar** valida sin guardar. **Probar y guardar** vuelve a probar y solo
+   guarda si pasa: escribe una versión nueva de cada secreto en Key Vault y
+   registra `rotadaEn`, `rotadaPor*`, `validadaEn` y el resultado.
+3. Si la prueba falla, no se guarda nada. Se puede tildar "Guardar aunque la
+   prueba falle" (`forzar: true`): queda registrado como `FALLIDA`.
+
+Qué se puede validar desde el servidor:
+
+| Fuente / modo | Prueba |
+|---|---|
+| API / `USUARIO_PASSWORD` o `TOKEN` | login (si aplica) + `GET /v2/licensesUser/types` |
+| Panel / `SESION` | `POST /ajax/licencias/feriados.php` con la cookie; redirect o lista vacía = falla |
+| Panel / `USUARIO_PASSWORD` | no factible (formulario en iframe + SSO): queda `PENDIENTE_ROBOT` hasta la próxima corrida del robot |
+
+**Probar conexión** en la tarjeta prueba la configuración vigente y registra
+el resultado. Las rutas son `GET|PUT /api/conexiones` y
+`POST /api/conexiones/probar`; ninguna devuelve valores de secreto.
+
+### Robot y conexión
+
+El robot pide su configuración a `GET /api/robot/conexion?tenantId=` con
+`x-feriados-token` (el mismo `FERIADOS_TOKEN` de la ingesta). Recibe modo,
+parámetros y el secreto que corresponda, y al terminar informa con
+`POST /api/robot/conexion` si la credencial/sesión sirvió (actualiza
+`ultimoResultadoValidacion`). Solo las fallas de acceso (login rechazado,
+vuelta a `/s/login`, año vacío) marcan la conexión como `FALLIDA`; un error de
+red no. Un reporte con una `revision` anterior a la última rotación se ignora.
+
+**Fallback.** Si el módulo responde 404 (tenant sin conexión ni legado, o un
+módulo sin esta ruta), no responde, o devuelve 5xx, el robot usa
+`TURECIBO_USER`/`TURECIBO_PASSWORD`/`TURECIBO_ADMIN_URL` del entorno como
+antes. Un 401/403 aborta: el token está mal. En el workflow, los secrets
+`TURECIBO_USER`/`TURECIBO_PASSWORD` del environment `staging` pasan a ser
+**opcionales** y solo sirven para ese fallback; se pueden borrar una vez que
+la conexión `FERIADOS_PANEL` esté validada por el robot.
+
+### Modo SESION: cómo obtener la cookie
+
+Entrar al panel con un navegador, abrir `/gestion.licencias` (dispara el SSO),
+y copiar el valor de la cookie `PHPSESSID` del dominio del panel desde las
+herramientas de desarrollo. Cargarlo en la tarjeta del panel con modo
+**Sesión**. La sesión PHP vence: cuando el robot reporte `FALLIDA`, hay que
+renovarla.
+
+### Permisos sobre el vault
+
+- **Producción** (`infra/main.bicep`, vault propio con RBAC): la identidad del
+  App Service tiene **Key Vault Secrets Officer** (lee y escribe secretos;
+  no gestiona claves ni certificados ni el vault).
+- **Staging** (`infra/staging.bicep`, `kv-ignix-prod` con *access policies*):
+  RBAC no aplica; se agrega una access policy `get` + `set` sobre secretos
+  (sin `list` ni `delete`) controlada por el parámetro `allowSecretWrites`.
+  **Riesgo aceptado:** una access policy no se puede limitar por secreto, así
+  que la identidad de staging podría escribir cualquier secreto del vault
+  compartido, incluidos los de producción. `KEY_VAULT_PREFIJO=turecibo-staging`
+  evita colisiones de nombre, no el alcance. Con `allowSecretWrites=false` la
+  rotación desde el panel falla (502) y se rota cargando el secreto a mano en
+  el vault con el nombre determinístico.
 
 ## Rotar un secreto
 

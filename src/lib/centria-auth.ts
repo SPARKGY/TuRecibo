@@ -103,3 +103,10 @@ export function exigirAdmin(identidad: Identidad): Autenticado<Identidad> {
   }
   return { ok: true, datos: identidad };
 }
+
+/** Token de entrada + identidad + rol ADMIN, en un paso. */
+export function autenticarAdmin(req: Request): Autenticado<Identidad> {
+  const auth = autenticarUsuario(req);
+  if (!auth.ok) return auth;
+  return exigirAdmin(auth.datos);
+}

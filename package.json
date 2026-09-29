@@ -20,6 +20,8 @@
     "feriados:robot": "node scripts/feriados-robot.mjs"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/keyvault-secrets": "^4.11.2",
     "@prisma/client": "5.22.0",
     "next": "^14.2.35",
     "react": "18.3.1",

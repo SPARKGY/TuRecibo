@@ -37,6 +37,12 @@ param syncTokenSecretName string = 'turecibo-staging-sync-token'
 @description('Name of the independent holiday-ingestion token secret.')
 param feriadosTokenSecretName string = 'turecibo-staging-feriados-token'
 
+@description('Prefix for runtime-managed connection secrets (turecibo-staging-{tenant}-{fuente}-{campo}).')
+param keyVaultSecretPrefix string = 'turecibo-staging'
+
+@description('Grant the app identity get+set on vault secrets so connections can be rotated from the module UI. The shared vault uses access policies, so this cannot be scoped to individual secrets.')
+param allowSecretWrites bool = true
+
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' existing = {
   name: planName
 }
@@ -85,6 +91,12 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=${databaseUrlSecretName})' }
         { name: 'SYNC_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=${syncTokenSecretName})' }
         { name: 'FERIADOS_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=${feriadosTokenSecretName})' }
+        // Conexiones paramétricas: lectura/escritura en runtime con la
+        // identidad administrada. El prefijo separa los secretos de staging de
+        // los de producción, porque el vault es compartido.
+        { name: 'KEY_VAULT_URL', value: vault.properties.vaultUri }
+        { name: 'KEY_VAULT_PREFIJO', value: keyVaultSecretPrefix }
+        // Fallback de las filas migradas desde CredencialTuRecibo.
         { name: 'TURECIBO_USER', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=turecibo-username)' }
         { name: 'TURECIBO_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=turecibo-password)' }
       ]
@@ -99,6 +111,27 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
     principalId: app.identity.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// `kv-ignix-prod` uses access policies, not RBAC, so the "Key Vault Secrets
+// Officer" role has no effect there. The minimum equivalent is get+set on
+// secrets (no list, no delete). `add` merges with the existing get-only policy.
+// Risk: access policies cannot be scoped per secret, so this allows writing any
+// secret in the shared vault. See docs/RUNBOOK.md.
+resource vaultSecretWrites 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = if (allowSecretWrites) {
+  parent: vault
+  name: 'add'
+  properties: {
+    accessPolicies: [
+      {
+        tenantId: subscription().tenantId
+        objectId: app.identity.principalId
+        permissions: {
+          secrets: ['get', 'set']
+        }
+      }
+    ]
   }
 }
 

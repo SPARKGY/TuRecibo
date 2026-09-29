@@ -76,6 +76,11 @@ async function pedir(url: string, init: RequestInit): Promise<Response> {
  * de una misma corrida sí se reusa, porque el objeto vive en el stack.
  */
 export async function login(cred: Credenciales): Promise<string> {
+  // Modo TOKEN: el bearer ya viene emitido y no hay login que hacer.
+  if (cred.modo === "TOKEN") {
+    if (!cred.token) throw new TuReciboError("La conexión está en modo TOKEN pero no tiene token");
+    return cred.token;
+  }
   const res = await pedir(`${cred.baseUrl}/v2/auth-mod/login`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -88,6 +93,18 @@ export async function login(cred: Credenciales): Promise<string> {
   const data = (await res.json().catch(() => null)) as { jwt?: string } | null;
   if (!data?.jwt) throw new TuReciboError("El login de Tu Recibo no devolvió jwt");
   return data.jwt;
+}
+
+/**
+ * Llamada liviana para probar una conexión: el catálogo de tipos es chico y de
+ * solo lectura. No parsea filas; solo confirma que el bearer sirve.
+ */
+export async function verificarAcceso(cred: Credenciales, jwt: string): Promise<void> {
+  const res = await pedir(`${cred.baseUrl}/v2/licensesUser/types`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) throw new TuReciboError(`El catálogo de tipos devolvió HTTP ${res.status}`);
 }
 
 /** Catálogo completo de tipos, no los tipos que aparecieron en alguna licencia. */

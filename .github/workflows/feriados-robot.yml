@@ -18,7 +18,7 @@ on:
         required: true
         type: string
       anios:
-        description: "Años separados por coma. Vacío = el actual y el siguiente."
+        description: "Años separados por coma. Vacío = los de la conexión, o el actual y el siguiente."
         required: false
         type: string
       enviar:
@@ -49,30 +49,21 @@ jobs:
       - name: Instalar solo Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Calcular los años a cubrir
-        id: anios
-        env:
-          ANIOS: ${{ inputs.anios }}
-        run: |
-          set -euo pipefail
-          if [ -n "${ANIOS:-}" ]; then
-            echo "valor=${ANIOS}" >> "$GITHUB_OUTPUT"
-          else
-            # El año que viene importa tanto como el actual: en diciembre, un
-            # cálculo de días hábiles ya cruza el corte de año.
-            actual=$(date -u +%Y)
-            echo "valor=${actual},$((actual + 1))" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Raspar e ingestar
+        # Solo hace falta FERIADOS_TOKEN (y la variable MODULO_BASE_URL): el
+        # robot le pide al módulo modo y credenciales del panel
+        # (`GET /api/robot/conexion`). TURECIBO_USER/TURECIBO_PASSWORD quedan
+        # como fallback **opcional** para tenants sin conexión en el módulo o
+        # un módulo que todavía no expone esa ruta; si los secrets no existen
+        # llegan vacíos y el fallback simplemente no aplica.
         env:
+          MODULO_BASE_URL: ${{ vars.MODULO_BASE_URL }}
+          FERIADOS_TOKEN: ${{ secrets.FERIADOS_TOKEN }}
           TURECIBO_ADMIN_URL: ${{ vars.TURECIBO_ADMIN_URL }}
           TURECIBO_USER: ${{ secrets.TURECIBO_USER }}
           TURECIBO_PASSWORD: ${{ secrets.TURECIBO_PASSWORD }}
-          MODULO_BASE_URL: ${{ vars.MODULO_BASE_URL }}
-          FERIADOS_TOKEN: ${{ secrets.FERIADOS_TOKEN }}
           TENANT: ${{ inputs.tenant || vars.TENANT_POR_DEFECTO }}
-          ANIOS: ${{ steps.anios.outputs.valor }}
+          ANIOS: ${{ inputs.anios }}
         run: |
           set -euo pipefail
           # En el cron siempre se ingesta; a mano, solo si lo pidieron. El
@@ -82,7 +73,12 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.enviar }}" = "true" ]; then
             extra="--enviar"
           fi
-          node scripts/feriados-robot.mjs --tenant "$TENANT" --anios "$ANIOS" $extra
+          # Sin --anios, el robot usa los años configurados en la conexión o,
+          # si no hay, el actual y el siguiente.
+          if [ -n "${ANIOS:-}" ]; then
+            extra="$extra --anios $ANIOS"
+          fi
+          node scripts/feriados-robot.mjs --tenant "$TENANT" $extra
 
       - name: Guardar lo que vio el robot
         if: failure()

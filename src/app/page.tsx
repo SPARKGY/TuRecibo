@@ -1,13 +1,16 @@
 import { MAESTROS } from "@/lib/maestros";
 import { CODIGO_MODULO, NOMBRE_MODULO, VERSION_MODULO } from "@/lib/env";
+import PanelConexiones from "./conexiones/PanelConexiones";
 
 /**
  * Página de cortesía. El módulo es casi todo backend: su trabajo real es
  * extraer de Tu Recibo y publicar maestros. Esta pantalla existe para que quien
  * entre por `/m/<codigo>` vea qué publica y no una pantalla en blanco.
  *
- * No muestra datos: cualquier cifra acá tendría que resolver tenant e identidad,
- * y eso ya lo hacen las rutas con la identidad del proxy.
+ * No muestra datos de negocio: cualquier cifra acá tendría que resolver tenant
+ * e identidad, y eso ya lo hacen las rutas con la identidad del proxy. La
+ * excepción es el panel de conexiones, que es un componente cliente y pide
+ * todo a `/api/conexiones` (solo ADMIN).
  */
 export default function Home() {
   return (
@@ -30,6 +33,8 @@ export default function Home() {
           </li>
         ))}
       </ul>
+
+      <PanelConexiones />
 
       <p style={{ color: "#555" }}>
         Para conectarlos, se habilita la conexión por campo y fila desde CENTRIA. Este módulo no otorga acceso por su

@@ -224,6 +224,8 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'CENTRIA_BASE_URL', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=centria-base-url)' }
         { name: 'SYNC_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=sync-token)' }
         { name: 'FERIADOS_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=feriados-token)' }
+        // Fallback de las filas migradas desde CredencialTuRecibo. Se pueden
+        // retirar cuando todas las conexiones se hayan rotado al vault.
         { name: 'TURECIBO_USER', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=turecibo-user)' }
         { name: 'TURECIBO_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=turecibo-password)' }
       ]
@@ -235,12 +237,17 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
 // --- Permisos ---------------------------------------------------------------
 
 var rolLectorSecretos = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+var rolOficialSecretos = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // Key Vault Secrets Officer
 
-resource appLeeSecretos 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+// Officer y no User: rotar credenciales desde el panel escribe versiones
+// nuevas de 	urecibo-{tenant}-{fuente}-{campo}. Es el rol mínimo integrado
+// que permite setSecret; el vault es exclusivo del módulo, así que el
+// alcance no excede sus propios secretos.
+resource appGestionaSecretos 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: vault
-  name: guid(vault.id, app.id, rolLectorSecretos)
+  name: guid(vault.id, app.id, rolOficialSecretos)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', rolLectorSecretos)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', rolOficialSecretos)
     principalId: app.identity.principalId
     principalType: 'ServicePrincipal'
   }
