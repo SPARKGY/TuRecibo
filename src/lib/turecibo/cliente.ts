@@ -94,7 +94,7 @@ export async function login(cred: Credenciales): Promise<string> {
 export async function traerTiposLicencia(cred: Credenciales, jwt: string): Promise<TipoLicenciaCrudo[]> {
   const res = await pedir(`${cred.baseUrl}/v2/licensesUser/types`, {
     method: "GET",
-    headers: { authorization: jwt },
+    headers: { authorization: `Bearer ${jwt}` },
   });
   if (!res.ok) throw new TuReciboError(`El catálogo de tipos devolvió HTTP ${res.status}`);
 
@@ -165,7 +165,7 @@ export async function traerLicencias(cred: Credenciales, jwt: string): Promise<L
     const offset = (pagina - 1) * LIMITE_POR_PAGINA;
     const res = await pedir(
       `${cred.baseUrl}/v2/licensesUser/licenses?pagination=${LIMITE_POR_PAGINA},${pagina},${offset}`,
-      { method: "POST", headers: { authorization: jwt } },
+      { method: "POST", headers: { authorization: `Bearer ${jwt}` } },
     );
     if (!res.ok) throw new TuReciboError(`El padrón de licencias devolvió HTTP ${res.status} en la página ${pagina}`);
 
