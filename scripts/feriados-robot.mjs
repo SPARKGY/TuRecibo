@@ -100,12 +100,21 @@ async function raspar() {
     await form.usuario.fill(USUARIO);
     await form.clave.fill(CLAVE);
     await form.submit.click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForURL((url) => url.pathname !== "/s/login", {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
 
     // Este `goto` no es decorativo: es el que dispara el SSO que establece la
     // sesión PHP. Sin pasar por acá, el POST de abajo responde como anónimo y
     // devuelve una lista vacía, que es indistinguible de "no hay feriados".
-    await page.goto(`${ADMIN_URL}/gestion.licencias`, { waitUntil: "networkidle" });
+    const gestion = await page.goto(`${ADMIN_URL}/gestion.licencias`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    if (!gestion?.ok()) {
+      throw new Error(`El panel de licencias devolvió HTTP ${gestion?.status() ?? "sin respuesta"}.`);
+    }
     if (new URL(page.url()).pathname === "/s/login") {
       throw new Error("El panel volvió al login; no se estableció la sesión.");
     }
@@ -117,6 +126,7 @@ async function raspar() {
         async ({ base, anio }) => {
           const res = await fetch(`${base}/ajax/licencias/feriados.php`, {
             method: "POST",
+            signal: AbortSignal.timeout(30_000),
             credentials: "include",
             headers: {
               "content-type": "application/x-www-form-urlencoded; charset=UTF-8",

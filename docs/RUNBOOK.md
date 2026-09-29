@@ -219,7 +219,9 @@ El formulario puede cambiar sus nombres de campo: el robot selecciona dentro
 del formulario visible por tipo de input, incluso si está en un iframe. Si
 falla antes de raspar, el workflow adjunta una captura saneada en
 `feriados-fallido` (sin campos, texto ni iframes); no se reintenta el login
-automáticamente.
+automáticamente. El panel puede mantener conexiones de red abiertas: se espera
+el cambio de URL tras el login y el DOM de `/gestion.licencias`, no
+`networkidle`; la lectura del endpoint de feriados tiene su propio timeout.
 
 El robot aborta ante un año vacío y no envía nada. Si el panel cambió, hay que
 ajustar el selector; mientras tanto, los feriados se pueden cargar con overrides
