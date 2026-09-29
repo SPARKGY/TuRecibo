@@ -1,9 +1,51 @@
 # Runbook
 
-## Estado: nada desplegado
+## Staging compartido
 
-Al cierre de esta etapa, el módulo está **implementado y verificado localmente**
-(typecheck, lint, 57 tests, build) y **nada más**. Concretamente:
+El sitio de staging `turecibo-modulo-staging.azurewebsites.net` usa
+`asp-ignix-staging`, una imagen versionada en `ignixacrprod` y la base aislada
+`turecibo_staging` en `psql-ignix-prod`. Su configuración de App Service está
+en `infra/staging.bicep`: **no** ejecutar `infra/main.bicep` para staging,
+porque crea otra infraestructura. `CENTRIA_BASE_URL` (leída por el módulo) y
+`CENTRIA_URL` apuntan ambas a CENTRIA staging. `/` sirve de health público;
+`/centria/salud` requiere el token de entrada. Los cron apuntan al environment
+GitHub `staging` y tienen gates separados como variables de **repositorio**:
+`ENABLE_SYNC_SCHEDULE` para tipos y ausencias y `ENABLE_FERIADOS_SCHEDULE`
+para el robot (el `if` de un job se evalúa antes de que estén disponibles
+las variables del environment). Si falta una variable o vale `false`, el
+respectivo job programado se omite; `workflow_dispatch` sigue disponible
+para pruebas controladas. El robot puede habilitarse tras su ingesta manual
+verificada, pero el sync debe permanecer apagado mientras Tu Recibo devuelva
+403 para tipos y ausencias. Los tokens y credenciales usados por los jobs
+están en los secrets del environment `staging`.
+
+**Riesgos aceptados para staging:**
+
+- `kv-ignix-prod` usa *access policies*. La identidad del sitio tiene solo
+  permiso `get` (sin `list`), pero ese permiso alcanza **todos** los secretos
+  del vault, incluidos los de producción; no se puede limitar a los tres
+  secretos de este módulo en ese modo. Pendiente: vault de staging separado o
+  RBAC a nivel de secreto. Las credenciales CENTRIA de staging se obtuvieron
+  tras el alta del módulo y sustituyeron los placeholders iniciales.
+- En el PostgreSQL compartido, `ignix` y `postgres` conservan `PUBLIC CONNECT`,
+  al igual que en el despliegue de Timesheet staging. El rol
+  `turecibo_staging_app` puede establecer conexión con esas dos bases, pero
+  no puede crear objetos en `public` ni leer una tabla de usuario de `ignix`;
+  `postgres` no tenía tablas de usuario al verificar. No conecta a
+  `centria_staging`, `timesheet_staging`, `timesheet_next_staging` ni
+  `kairos_staging`. No se tocaron permisos de otras bases. Para aislamiento
+  estricto de conexión haría falta un servidor propio o revisar las ACL
+  existentes con sus responsables.
+
+La regla temporal de firewall `turecibo-staging-setup-20260929-tmp` queda
+neutralizada en `0.0.0.1–0.0.0.1`: el RG tiene bloqueo `DoNotDelete` y no se
+intenta eliminarla.
+
+## Estado inicial antes del despliegue de staging
+
+Antes del despliegue de staging, el módulo estaba **implementado y verificado
+localmente** y nada más. Este inventario corresponde a aquel momento, no al
+estado actual de staging:
 
 - No se creó ningún recurso en Azure.
 - No se desplegó nada.
@@ -117,17 +159,21 @@ Verificar contra lo que hoy tiene KAiROS antes de que nadie consuma
 
 ### G6 — Cron y consumidores
 
-Recién acá, después de infraestructura, secretos y primera corrida manual
-verificada, se descomentan los bloques `schedule` de ambos workflows y se crea
-la conexión de Timesheet en CENTRIA. Hasta entonces solo está disponible
-`workflow_dispatch`; mergear a `main` no inicia extracciones programadas.
+En staging, después de infraestructura, secretos y una ingesta manual de
+feriados verificada por el módulo y CENTRIA, cambiar la variable de
+repositorio `ENABLE_FERIADOS_SCHEDULE` a `true`. Mantener
+`ENABLE_SYNC_SCHEDULE=false` hasta resolver el 403 de tipos y ausencias
+con el proveedor y verificar una corrida manual de sync; **no** habilitar
+ambos mediante un gate compartido. Si un gate queda apagado, el evento
+`schedule` de ese workflow no ejecuta el job. `workflow_dispatch` permite
+ensayos controlados. No usar secretos ni environment de producción.
 
 ## Operación diaria
 
 | Qué | Cuándo | Dónde |
 |---|---|---|
-| Sync de tipos y ausencias (desde G6) | 06:15 UTC | `.github/workflows/sync-programado.yml` |
-| Robot de feriados (desde G6) | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
+| Sync de tipos y ausencias (pendiente resolver 403 y habilitar su gate) | 06:15 UTC | `.github/workflows/sync-programado.yml` |
+| Robot de feriados (tras habilitar su gate) | lunes 07:00 UTC | `.github/workflows/feriados-robot.yml` |
 
 Ambos tienen `workflow_dispatch` para correr a mano. El robot es dry-run salvo
 que se tilde `enviar` (una vez habilitado el cron, siempre ingesta).
@@ -173,6 +219,14 @@ sincronizar durante semanas sin que nadie lo note.
 Casi siempre es la sesión PHP. El robot navega a `/gestion.licencias` después
 del login porque **ese `goto` es el que dispara el SSO**; sin él, el POST
 responde como anónimo con una lista vacía.
+
+El formulario puede cambiar sus nombres de campo: el robot selecciona dentro
+del formulario visible por tipo de input, incluso si está en un iframe. Si
+falla antes de raspar, el workflow adjunta una captura saneada en
+`feriados-fallido` (sin campos, texto ni iframes); no se reintenta el login
+automáticamente. El panel puede mantener conexiones de red abiertas: se espera
+el cambio de URL tras el login y el DOM de `/gestion.licencias`, no
+`networkidle`; la lectura del endpoint de feriados tiene su propio timeout.
 
 El robot aborta ante un año vacío y no envía nada. Si el panel cambió, hay que
 ajustar el selector; mientras tanto, los feriados se pueden cargar con overrides

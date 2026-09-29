@@ -8,10 +8,9 @@ name: Sync programado
 # Acá hay un solo reloj y queda registro de cada corrida.
 
 on:
-  # Reactivar en G6, tras infraestructura, secretos y primera corrida manual verificada:
-  # schedule:
-  #   # 06:15 UTC ≈ 03:15 en Argentina.
-  #   - cron: "15 6 * * *"
+  schedule:
+    # 06:15 UTC ≈ 03:15 en Argentina. Solo staging, tras el gate de corridas manuales.
+    - cron: "15 6 * * *"
   workflow_dispatch:
     inputs:
       tenant:
@@ -27,8 +26,9 @@ concurrency:
 
 jobs:
   sincronizar:
+    if: github.event_name != 'schedule' || vars.ENABLE_SYNC_SCHEDULE == 'true'
     runs-on: ubuntu-latest
-    environment: produccion
+    environment: staging
     steps:
       - name: Disparar la corrida
         env:
