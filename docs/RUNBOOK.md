@@ -24,8 +24,10 @@ están en los secrets del environment `staging`.
 - `kv-ignix-prod` usa *access policies*. La identidad del sitio tiene solo
   permiso `get` (sin `list`), pero ese permiso alcanza **todos** los secretos
   del vault, incluidos los de producción; no se puede limitar a los tres
-  secretos de este módulo en ese modo. Pendiente: vault de staging separado o
-  RBAC a nivel de secreto. Las credenciales CENTRIA de staging se obtuvieron
+  secretos de este módulo en ese modo. Pendiente: mover también estos
+  secretos de arranque al vault dedicado `kv-turecibo-stg`, que ya aloja los
+  secretos de conexión (ver "Permisos sobre el vault"). La escritura nunca se
+  concede sobre `kv-ignix-prod`. Las credenciales CENTRIA de staging se obtuvieron
   tras el alta del módulo y sustituyeron los placeholders iniciales.
 - En el PostgreSQL compartido, `ignix` y `postgres` conservan `PUBLIC CONNECT`,
   al igual que en el despliegue de Timesheet staging. El rol
@@ -331,15 +333,50 @@ renovarla.
 - **Producción** (`infra/main.bicep`, vault propio con RBAC): la identidad del
   App Service tiene **Key Vault Secrets Officer** (lee y escribe secretos;
   no gestiona claves ni certificados ni el vault).
-- **Staging** (`infra/staging.bicep`, `kv-ignix-prod` con *access policies*):
-  RBAC no aplica; se agrega una access policy `get` + `set` sobre secretos
-  (sin `list` ni `delete`) controlada por el parámetro `allowSecretWrites`.
-  **Riesgo aceptado:** una access policy no se puede limitar por secreto, así
-  que la identidad de staging podría escribir cualquier secreto del vault
-  compartido, incluidos los de producción. `KEY_VAULT_PREFIJO=turecibo-staging`
-  evita colisiones de nombre, no el alcance. Con `allowSecretWrites=false` la
-  rotación desde el panel falla (502) y se rota cargando el secreto a mano en
-  el vault con el nombre determinístico.
+- **Staging** (`infra/staging.bicep`): los secretos de conexión viven en un
+  **vault dedicado** `kv-turecibo-stg` (parámetro `connectionsVaultName`), con
+  RBAC, soft delete de 90 días y purge protection, que crea la misma
+  plantilla. La identidad del sitio tiene **Key Vault Secrets Officer solo
+  sobre ese vault**, y `KEY_VAULT_URL` apunta a él. Sobre el vault compartido
+  `kv-ignix-prod` (*access policies*) la plantilla **no concede nada**: la
+  identidad conserva únicamente el `get` preexistente para las referencias de
+  App Settings de arranque (`DATABASE_URL`, tokens, `TURECIBO_USER/PASSWORD`).
+  Staging no puede escribir secretos de producción.
+
+  Por qué no una access policy `set` en `kv-ignix-prod`: no se puede limitar
+  por secreto, así que daría a staging escritura sobre todos los secretos de
+  producción. Un prefijo de nombre no alcanza como separación.
+
+#### Alta y migración del vault de staging
+
+1. Desplegar `infra/staging.bicep` (crea `kv-turecibo-stg` y la asignación de
+   rol). Para cargar secretos a mano, pasar
+   `connectionsVaultAdminObjectIds=["<objectId de usuario o grupo>"]`; si no,
+   solo la app puede escribir. Verificar antes con `az deployment group
+   what-if`: `kv-ignix-prod` debe figurar como `Ignore` (sin cambios).
+2. Esperar la propagación de RBAC (hasta ~5 min) antes de rotar desde el panel;
+   mientras tanto la escritura devuelve 502 y no se guarda nada.
+3. No hay nada que copiar: las filas migradas desde `CredencialTuRecibo`
+   usan `secretosEnv`, que se resuelve con las App Settings que ya leen
+   `kv-ignix-prod`. Licencias y robot siguen funcionando igual. La primera
+   rotación desde el panel escribe en `kv-turecibo-stg`
+   (`turecibo-staging-{tenant}-{fuente}-{campo}`) y la fila pasa a apuntar
+   ahí.
+4. Si hubiera secretos `turecibo-staging-*` de conexión escritos a mano en
+   `kv-ignix-prod`, volver a cargarlos desde el panel (o con
+   `az keyvault secret set --vault-name kv-turecibo-stg`) y borrarlos del
+   vault compartido con su responsable.
+5. Comprobar que la identidad no tiene escritura en el vault compartido:
+   `az keyvault show -n kv-ignix-prod --query "properties.accessPolicies[?objectId=='<principalId>'].permissions.secrets"`
+   debe devolver solo `["get"]`. Si alguna vez se aplicó una versión
+   anterior de esta rama con `set`, dejarla en `get` con
+   `az keyvault set-policy -n kv-ignix-prod --object-id <principalId> --secret-permissions get`.
+
+Rollback: volver `KEY_VAULT_URL` al valor anterior no es necesario ni
+recomendable. Si el vault dedicado no está disponible, la rotación desde el
+panel falla sin guardar y las filas con `secretosEnv` siguen resolviendo por
+App Settings. Purge protection impide borrar el vault de forma definitiva
+durante la retención: es intencional.
 
 ## Rotar un secreto
 

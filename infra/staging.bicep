@@ -1,7 +1,10 @@
 // Staging only. Reuses existing shared resources; does not create a server,
-// plan, registry, vault, firewall rule, database or database login.
-// Provision database/login and seed the three vault secrets separately before
-// deploying the application image. Never apply infra/main.bicep for staging.
+// plan, registry, firewall rule, database or database login. It does create a
+// dedicated staging Key Vault for runtime-managed connection secrets, so the
+// staging identity never gets write access to the shared production vault.
+// Provision database/login and seed the bootstrap vault secrets separately
+// before deploying the application image. Never apply infra/main.bicep for
+// staging.
 targetScope = 'resourceGroup'
 
 @description('Name of the existing shared Linux App Service plan.')
@@ -10,8 +13,14 @@ param planName string = 'asp-ignix-staging'
 @description('Name of the new staging web app.')
 param appName string = 'turecibo-modulo-staging'
 
-@description('Name of the existing shared Key Vault.')
+@description('Name of the existing shared Key Vault. Read-only (get) for bootstrap App Settings references; this template never grants write on it.')
 param vaultName string = 'kv-ignix-prod'
+
+@description('Name of the dedicated staging Key Vault for runtime-managed connection secrets (globally unique, 3-24 chars).')
+param connectionsVaultName string = 'kv-turecibo-stg'
+
+@description('Object IDs (users or groups) that may seed or rotate secrets in the dedicated staging vault by hand. Optional.')
+param connectionsVaultAdminObjectIds array = []
 
 @description('Name of the existing container registry.')
 param registryName string = 'ignixacrprod'
@@ -38,10 +47,8 @@ param syncTokenSecretName string = 'turecibo-staging-sync-token'
 param feriadosTokenSecretName string = 'turecibo-staging-feriados-token'
 
 @description('Prefix for runtime-managed connection secrets (turecibo-staging-{tenant}-{fuente}-{campo}).')
+#disable-next-line secure-secrets-in-params // Name prefix, not a secret value.
 param keyVaultSecretPrefix string = 'turecibo-staging'
-
-@description('Grant the app identity get+set on vault secrets so connections can be rotated from the module UI. The shared vault uses access policies, so this cannot be scoped to individual secrets.')
-param allowSecretWrites bool = true
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' existing = {
   name: planName
@@ -49,6 +56,30 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' existing = {
 
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: vaultName
+}
+
+// Dedicated vault: RBAC, soft delete and purge protection. Only staging
+// connection secrets live here, so Secrets Officer on this scope cannot reach
+// production secrets.
+resource connectionsVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: connectionsVaultName
+  location: resourceGroup().location
+  tags: {
+    modulo: 'turecibo'
+    entorno: 'staging'
+  }
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    enablePurgeProtection: true
+    publicNetworkAccess: 'Enabled'
+  }
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
@@ -92,9 +123,9 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'SYNC_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=${syncTokenSecretName})' }
         { name: 'FERIADOS_TOKEN', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=${feriadosTokenSecretName})' }
         // Conexiones paramétricas: lectura/escritura en runtime con la
-        // identidad administrada. El prefijo separa los secretos de staging de
-        // los de producción, porque el vault es compartido.
-        { name: 'KEY_VAULT_URL', value: vault.properties.vaultUri }
+        // identidad administrada, solo sobre el vault dedicado de staging.
+        // Nunca apuntar a `kv-ignix-prod`.
+        { name: 'KEY_VAULT_URL', value: connectionsVault.properties.vaultUri }
         { name: 'KEY_VAULT_PREFIJO', value: keyVaultSecretPrefix }
         // Fallback de las filas migradas desde CredencialTuRecibo.
         { name: 'TURECIBO_USER', value: '@Microsoft.KeyVault(VaultName=${vault.name};SecretName=turecibo-username)' }
@@ -114,26 +145,29 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// `kv-ignix-prod` uses access policies, not RBAC, so the "Key Vault Secrets
-// Officer" role has no effect there. The minimum equivalent is get+set on
-// secrets (no list, no delete). `add` merges with the existing get-only policy.
-// Risk: access policies cannot be scoped per secret, so this allows writing any
-// secret in the shared vault. See docs/RUNBOOK.md.
-resource vaultSecretWrites 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = if (allowSecretWrites) {
-  parent: vault
-  name: 'add'
+// Key Vault Secrets Officer, scoped to the dedicated staging vault only. The
+// shared `kv-ignix-prod` keeps its pre-existing get-only access policy for
+// this identity, managed outside this template.
+var secretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
+resource connectionsVaultWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: connectionsVault
+  name: guid(connectionsVault.id, app.id, secretsOfficerRoleId)
   properties: {
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: app.identity.principalId
-        permissions: {
-          secrets: ['get', 'set']
-        }
-      }
-    ]
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', secretsOfficerRoleId)
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
+
+resource connectionsVaultAdmins 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for objectId in connectionsVaultAdminObjectIds: {
+  scope: connectionsVault
+  name: guid(connectionsVault.id, objectId, secretsOfficerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', secretsOfficerRoleId)
+    principalId: objectId
+  }
+}]
 
 resource scmAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
   parent: app
@@ -154,3 +188,4 @@ resource ftpAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12
 output appId string = app.id
 output appHostname string = app.properties.defaultHostName
 output principalId string = app.identity.principalId
+output connectionsVaultUri string = connectionsVault.properties.vaultUri
