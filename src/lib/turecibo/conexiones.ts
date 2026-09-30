@@ -12,6 +12,7 @@
  */
 
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { ConexionTuRecibo, FuenteConexion, ModoConexion, ResultadoValidacion } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -137,8 +138,10 @@ export type ConexionResuelta = {
   revision: string;
 };
 
-function revisionDe(fila: Pick<ConexionTuRecibo, "rotadaEn" | "creadaEn">): string {
-  return (fila.rotadaEn ?? fila.creadaEn).toISOString();
+function revisionDe(fila: Pick<ConexionTuRecibo, "rotadaEn" | "creadaEn" | "modo" | "parametros" | "secretos" | "secretosEnv">): string {
+  const configuracion = JSON.stringify([fila.modo, fila.parametros, fila.secretos, fila.secretosEnv]);
+  const huella = createHash("sha256").update(configuracion).digest("hex").slice(0, 20);
+  return `${(fila.rotadaEn ?? fila.creadaEn).toISOString()}:${huella}`;
 }
 
 /** Valida la combinación fuente/modo/parámetros. Tira `ErrorConexion` 400. */

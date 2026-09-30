@@ -338,10 +338,27 @@ describe("cambio de credenciales", () => {
   });
 
   it("un reporte concurrente a una rotación no pisa la nueva validación", async () => {
-    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila());
+    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila({
+      fuente: "FERIADOS_PANEL", parametros: { adminUrl: "https://admin.turecibo.com" },
+      secretos: {}, secretosEnv: { usuario: "TURECIBO_USER", password: "TURECIBO_PASSWORD" },
+    }));
+    const revision = (await resolverConexion("acme", "FERIADOS_PANEL"))!.revision;
     prismaMock.conexionTuRecibo.updateMany.mockResolvedValue({ count: 0 });
-    await expect(registrarValidacion("acme", "FERIADOS_PANEL", { resultado: "FALLIDA", detalle: "antigua" }, creada.toISOString()))
+    await expect(registrarValidacion("acme", "FERIADOS_PANEL", { resultado: "FALLIDA", detalle: "antigua" }, revision))
       .resolves.toBe("revision-vieja");
+  });
+
+  it("un cambio de parámetros invalida la revisión anterior aun sin rotar secretos", async () => {
+    almacenFalso({
+      "turecibo-acme-licencias-api-usuario": "u-kv",
+      "turecibo-acme-licencias-api-password": "p-kv",
+    });
+    prismaMock.conexionTuRecibo.findUnique.mockResolvedValueOnce(fila())
+      .mockResolvedValueOnce(fila({ parametros: { baseUrl: "https://api.nueva.test" } }));
+    const revision = (await resolverConexion("acme", "LICENCIAS_API"))!.revision;
+    await expect(registrarValidacion("acme", "LICENCIAS_API", { resultado: "FALLIDA", detalle: "antigua" }, revision))
+      .resolves.toBe("revision-vieja");
+    expect(prismaMock.conexionTuRecibo.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -506,16 +523,20 @@ describe("endpoint del robot", () => {
       origen: "conexion",
       credenciales: { sesion: "abc123" },
       parametros: { adminUrl: "https://admin.turecibo.com", anios: [2026], nombreCookieSesion: "PHPSESSID" },
-      revision: creada.toISOString(),
+      revision: expect.stringMatching(/^2026-01-01T00:00:00.000Z:[a-f0-9]{20}$/),
     });
   });
 
   it("registra el resultado que reporta el robot", async () => {
-    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila({ fuente: "FERIADOS_PANEL" }));
+    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila({
+      fuente: "FERIADOS_PANEL", parametros: { adminUrl: "https://admin.turecibo.com" },
+      secretos: {}, secretosEnv: { usuario: "TURECIBO_USER", password: "TURECIBO_PASSWORD" },
+    }));
+    const revision = (await resolverConexion("acme", "FERIADOS_PANEL"))!.revision;
     const res = await postRobot(
       pedido("http://m/api/robot/conexion", { "x-feriados-token": "robot-secreto" }, {
         method: "POST",
-        body: JSON.stringify({ tenantId: "acme", ok: false, detalle: "volvió al login", revision: creada.toISOString() }),
+        body: JSON.stringify({ tenantId: "acme", ok: false, detalle: "volvió al login", revision }),
       }),
     );
     expect(res.status).toBe(200);

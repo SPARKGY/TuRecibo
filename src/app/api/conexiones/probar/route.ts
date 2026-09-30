@@ -42,7 +42,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "No hay conexión configurada" }, { status: 404, headers: SIN_CACHE });
       }
       const prueba = await probarConexion(conexion.fuente, conexion.modo, conexion.parametros, conexion.secretos);
-      const registro = await registrarValidacion(tenantId, conexion.fuente, prueba);
+      const registro = await registrarValidacion(tenantId, conexion.fuente, prueba, conexion.revision);
       return NextResponse.json({ ok: prueba.resultado !== "FALLIDA", prueba, registro }, { headers: SIN_CACHE });
     }
 
