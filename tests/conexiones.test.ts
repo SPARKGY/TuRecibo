@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { prismaMock } = vi.hoisted(() => ({
   prismaMock: {
-    conexionTuRecibo: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), update: vi.fn() },
+    conexionTuRecibo: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     credencialTuRecibo: { findUnique: vi.fn(), findMany: vi.fn() },
   },
 }));
@@ -82,13 +82,16 @@ beforeEach(() => {
   process.env.TURECIBO_PASSWORD = "clave-env";
   process.env.CENTRIA_ENTRY_TOKEN = "entrada-secreta";
   process.env.FERIADOS_TOKEN = "robot-secreto";
+  process.env.TURECIBO_API_ORIGINS = "https://x.test,https://otra.test,https://api.test";
+  process.env.TURECIBO_ADMIN_ORIGINS = "https://admin.test";
+  prismaMock.conexionTuRecibo.updateMany.mockResolvedValue({ count: 1 });
 });
 
 afterEach(() => {
   vi.clearAllMocks();
   establecerAlmacenSecretos(null);
   vi.unstubAllGlobals();
-  for (const k of ["TURECIBO_USER", "TURECIBO_PASSWORD", "CENTRIA_ENTRY_TOKEN", "FERIADOS_TOKEN", "KEY_VAULT_PREFIJO"]) {
+  for (const k of ["TURECIBO_USER", "TURECIBO_PASSWORD", "CENTRIA_ENTRY_TOKEN", "FERIADOS_TOKEN", "KEY_VAULT_PREFIJO", "TURECIBO_API_ORIGINS", "TURECIBO_ADMIN_ORIGINS"]) {
     delete process.env[k];
   }
 });
@@ -185,6 +188,10 @@ describe("validación zod", () => {
     ["modo que no aplica a la fuente", "LICENCIAS_API", "SESION", {}],
     ["token en el panel", "FERIADOS_PANEL", "TOKEN", {}],
     ["http en vez de https", "LICENCIAS_API", "USUARIO_PASSWORD", { baseUrl: "http://x.test" }],
+    ["host no autorizado", "LICENCIAS_API", "USUARIO_PASSWORD", { baseUrl: "https://otro.test" }],
+    ["IP privada", "LICENCIAS_API", "USUARIO_PASSWORD", { baseUrl: "https://127.0.0.1" }],
+    ["credenciales en URL", "LICENCIAS_API", "USUARIO_PASSWORD", { baseUrl: "https://u:p@api.turecibo.com" }],
+    ["ruta en URL", "LICENCIAS_API", "USUARIO_PASSWORD", { baseUrl: "https://api.turecibo.com/otra" }],
     ["clave desconocida", "LICENCIAS_API", "USUARIO_PASSWORD", { otra: 1 }],
     ["año fuera de rango", "FERIADOS_PANEL", "SESION", { anios: [1990] }],
     ["cookie con caracteres raros", "FERIADOS_PANEL", "SESION", { nombreCookieSesion: "a;b" }],
@@ -253,20 +260,30 @@ describe("cambio de credenciales", () => {
     const r = await aplicarCambio("acme", cambio, autor, probar);
 
     expect(r).toMatchObject({ guardado: true, rotados: ["usuario", "password"] });
-    expect(almacen.escribir).toHaveBeenCalledWith("turecibo-acme-licencias-api-usuario", "nuevo");
-    expect(almacen.escribir).toHaveBeenCalledWith("turecibo-acme-licencias-api-password", "nueva-clave");
+    expect(almacen.escribir).toHaveBeenCalledWith(expect.stringMatching(/^turecibo-acme-[a-f0-9]{20}-licencias-api-usuario-[a-f0-9]{32}$/), "nuevo");
+    expect(almacen.escribir).toHaveBeenCalledWith(expect.stringMatching(/^turecibo-acme-[a-f0-9]{20}-licencias-api-password-[a-f0-9]{32}$/), "nueva-clave");
     const args = prismaMock.conexionTuRecibo.upsert.mock.calls[0]![0];
     expect(JSON.stringify(args)).not.toContain("nueva-clave");
     expect(args.create).toMatchObject({
       modo: "USUARIO_PASSWORD",
       secretos: {
-        usuario: "turecibo-acme-licencias-api-usuario",
-        password: "turecibo-acme-licencias-api-password",
+        usuario: expect.stringMatching(/^turecibo-acme-[a-f0-9]{20}-licencias-api-usuario-[a-f0-9]{32}$/),
+        password: expect.stringMatching(/^turecibo-acme-[a-f0-9]{20}-licencias-api-password-[a-f0-9]{32}$/),
       },
       rotadaPorId: "u1",
       rotadaPorEmail: "admin@acme.test",
       ultimoResultadoValidacion: "OK",
     });
+  });
+
+  it("un fallo del segundo secreto no cambia las referencias activas", async () => {
+    const { almacen } = almacenFalso();
+    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila());
+    almacen.escribir.mockImplementationOnce(async () => ({ version: "v1" })).mockRejectedValueOnce(new Error("KV no disponible"));
+    await expect(aplicarCambio("acme", cambio, autor, vi.fn().mockResolvedValue({ resultado: "OK", detalle: "ok" })))
+      .rejects.toThrow("KV no disponible");
+    expect(prismaMock.conexionTuRecibo.upsert).not.toHaveBeenCalled();
+    expect(almacen.escribir.mock.calls[0]![0]).not.toBe(fila().secretos.usuario);
   });
 
   it("forzar guarda y deja constancia de la falla", async () => {
@@ -317,7 +334,14 @@ describe("cambio de credenciales", () => {
     await expect(
       registrarValidacion("acme", "LICENCIAS_API", { resultado: "FALLIDA", detalle: "x" }, creada.toISOString()),
     ).resolves.toBe("revision-vieja");
-    expect(prismaMock.conexionTuRecibo.update).not.toHaveBeenCalled();
+    expect(prismaMock.conexionTuRecibo.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("un reporte concurrente a una rotación no pisa la nueva validación", async () => {
+    prismaMock.conexionTuRecibo.findUnique.mockResolvedValue(fila());
+    prismaMock.conexionTuRecibo.updateMany.mockResolvedValue({ count: 0 });
+    await expect(registrarValidacion("acme", "FERIADOS_PANEL", { resultado: "FALLIDA", detalle: "antigua" }, creada.toISOString()))
+      .resolves.toBe("revision-vieja");
   });
 });
 
@@ -380,10 +404,10 @@ describe("Key Vault", () => {
   });
 
   it("nombres determinísticos y válidos para Key Vault", () => {
-    expect(nombreSecreto("acme", "LICENCIAS_API", "password")).toBe("turecibo-acme-licencias-api-password");
-    expect(nombreSecreto("Acme S.A.", "FERIADOS_PANEL", "sesion")).toBe("turecibo-acme-s-a-feriados-panel-sesion");
+    expect(nombreSecreto("acme", "LICENCIAS_API", "password")).toMatch(/^turecibo-acme-[a-f0-9]{20}-licencias-api-password$/);
+    expect(nombreSecreto("Acme S.A.", "FERIADOS_PANEL", "sesion")).not.toBe(nombreSecreto("acme-s-a", "FERIADOS_PANEL", "sesion"));
     process.env.KEY_VAULT_PREFIJO = "turecibo-staging";
-    expect(nombreSecreto("acme", "FERIADOS_PANEL", "usuario")).toBe("turecibo-staging-acme-feriados-panel-usuario");
+    expect(nombreSecreto("acme", "FERIADOS_PANEL", "usuario")).toMatch(/^turecibo-staging-acme-[a-f0-9]{20}-feriados-panel-usuario$/);
   });
 });
 
@@ -495,8 +519,9 @@ describe("endpoint del robot", () => {
       }),
     );
     expect(res.status).toBe(200);
-    expect(prismaMock.conexionTuRecibo.update).toHaveBeenCalledWith(
+    expect(prismaMock.conexionTuRecibo.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: expect.objectContaining({ rotadaEn: null, actualizadaEn: creada }),
         data: expect.objectContaining({ ultimoResultadoValidacion: "FALLIDA", ultimoDetalleValidacion: "volvió al login" }),
       }),
     );

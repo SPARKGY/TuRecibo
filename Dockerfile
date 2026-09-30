@@ -5,7 +5,7 @@
 # pero corre en GitHub Actions: meter Chromium acá agregaría ~300 MB a una
 # imagen que lo usaría una vez por semana.
 
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 # `openssl` no es opcional: sin el binario, `prisma generate` no puede detectar
 # la versión del sistema y cae al engine de libssl 1.1. El `binaryTargets` del
@@ -20,7 +20,7 @@ RUN npx prisma generate
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080
 

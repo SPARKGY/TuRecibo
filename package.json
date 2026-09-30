@@ -4,7 +4,7 @@
   "private": true,
   "description": "Módulo SparkGY dueño de la extracción de Tu Recibo. Publica tipos de licencia, ausencias y feriados como maestros de CENTRIA.",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "next dev",

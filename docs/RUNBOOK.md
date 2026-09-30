@@ -271,11 +271,20 @@ Parámetros (validados con zod): `baseUrl` para la API; `adminUrl`, `anios`
 `PHPSESSID`) para el panel.
 
 **Secretos.** La base guarda solo nombres. Los valores viven en Key Vault con
-nombre determinístico `{KEY_VAULT_PREFIJO}-{tenant}-{fuente}-{campo}` (ej.
-`turecibo-acme-feriados-panel-sesion`). El módulo los lee y escribe en runtime
-con su identidad administrada (`KEY_VAULT_URL`), con caché en memoria de 60 s
+prefijo determinístico `{KEY_VAULT_PREFIJO}-{tenant-normalizado}-{hash-tenant}-{fuente}-{campo}`.
+Cada rotación crea un nombre nuevo con sufijo UUID, y solo después cambia la
+referencia en la base; los nombres antiguos quedan para la retención/limpieza
+operativa. El hash evita colisiones de ids que se normalizan igual. El módulo
+los lee y escribe en runtime con su identidad administrada (`KEY_VAULT_URL`), con caché en memoria de 60 s
 que se invalida al rotar. Las filas migradas guardan `secretosEnv` (nombres de
 variable) hasta la primera rotación desde el panel.
+
+Las URLs nuevas solo aceptan los orígenes oficiales HTTPS. Para un host propio
+del proveedor configurado previamente por el operador, usar
+`TURECIBO_API_ORIGINS` / `TURECIBO_ADMIN_ORIGINS` con una lista de orígenes
+HTTPS separados por coma. No se aceptan rutas, credenciales ni parámetros en
+la URL; el cliente API no sigue redirects. Las URLs heredadas ya guardadas se
+siguen leyendo para no interrumpir licencias/robot hasta su próxima rotación.
 
 ### Rotar desde el panel
 
@@ -363,8 +372,8 @@ renovarla.
    (`turecibo-staging-{tenant}-{fuente}-{campo}`) y la fila pasa a apuntar
    ahí.
 4. Si hubiera secretos `turecibo-staging-*` de conexión escritos a mano en
-   `kv-ignix-prod`, volver a cargarlos desde el panel (o con
-   `az keyvault secret set --vault-name kv-turecibo-stg`) y borrarlos del
+   `kv-ignix-prod`, volver a cargarlos desde el panel (los nombres nuevos
+   incluyen hash y UUID) y borrarlos del
    vault compartido con su responsable.
 5. Comprobar que la identidad no tiene escritura en el vault compartido:
    `az keyvault show -n kv-ignix-prod --query "properties.accessPolicies[?objectId=='<principalId>'].permissions.secrets"`

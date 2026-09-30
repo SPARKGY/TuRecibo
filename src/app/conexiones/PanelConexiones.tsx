@@ -164,6 +164,8 @@ function TarjetaConexion({ vista, base, alCambiar }: { vista: Vista; base: strin
       if (!res.ok) setError(cuerpo.error ?? `HTTP ${res.status}`);
       else setPrueba(cuerpo.prueba);
       await alCambiar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo probar la conexión.");
     } finally {
       setProbando(false);
     }

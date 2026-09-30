@@ -106,6 +106,9 @@ async function obtenerConexion() {
   if (res.status === 401 || res.status === 403) {
     abortar(`El módulo rechazó FERIADOS_TOKEN (HTTP ${res.status}).`);
   }
+  if (!res.ok && res.status !== 404 && res.status < 500) {
+    abortar(`El módulo rechazó la solicitud de conexión (HTTP ${res.status}).`);
+  }
   if (!res.ok) {
     log(`El módulo devolvió HTTP ${res.status} para la conexión; se intenta con las variables de entorno.`);
     return desdeEnv();

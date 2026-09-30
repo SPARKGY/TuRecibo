@@ -56,7 +56,7 @@ async function pedir(url: string, init: RequestInit): Promise<Response> {
   const control = new AbortController();
   const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: control.signal, cache: "no-store" });
+    return await fetch(url, { ...init, signal: control.signal, cache: "no-store", redirect: "manual" });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new TuReciboError(`Tu Recibo no respondió en ${TIMEOUT_MS / 1000}s`);

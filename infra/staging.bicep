@@ -100,7 +100,7 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
     serverFarmId: plan.id
     httpsOnly: true
     siteConfig: {
-      linuxFxVersion: empty(imageTag) ? 'NODE|20-lts' : 'DOCKER|${registry.properties.loginServer}/turecibo-staging:${imageTag}'
+      linuxFxVersion: empty(imageTag) ? 'NODE|22-lts' : 'DOCKER|${registry.properties.loginServer}/turecibo-staging:${imageTag}'
       acrUseManagedIdentityCreds: !empty(imageTag)
       alwaysOn: true
       ftpsState: 'Disabled'

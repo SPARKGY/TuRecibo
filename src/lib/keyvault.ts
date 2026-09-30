@@ -13,6 +13,7 @@
  */
 
 import { ConfiguracionInvalida, leerOpcional } from "@/lib/env";
+import { createHash, randomUUID } from "node:crypto";
 
 /** Lo mínimo que se usa del vault. Existe para poder reemplazarlo en tests. */
 export interface AlmacenSecretos {
@@ -89,8 +90,8 @@ export function invalidarSecreto(nombre: string): void {
  * Nombre determinístico de un secreto de conexión.
  *
  * Key Vault solo admite `[0-9a-zA-Z-]`, hasta 127 caracteres. El prefijo es
- * configurable porque staging comparte vault con producción: sin él, un tenant
- * de prueba con el mismo id pisaría el secreto productivo.
+ * configurable por entorno. El hash evita que ids de tenant distintos que se
+ * normalizan igual apunten al mismo secreto.
  */
 export function nombreSecreto(tenantId: string, fuente: string, campo: string): string {
   const prefijo = leerOpcional("KEY_VAULT_PREFIJO", "turecibo");
@@ -101,7 +102,14 @@ export function nombreSecreto(tenantId: string, fuente: string, campo: string): 
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
-  const nombre = [limpio(prefijo), limpio(tenantId), limpio(fuente), limpio(campo)].filter(Boolean).join("-");
-  if (nombre.length > 127) throw new ConfiguracionInvalida(`Nombre de secreto demasiado largo: ${nombre.slice(0, 40)}…`);
+  if (!tenantId.trim() || !prefijo.trim()) throw new ConfiguracionInvalida("Tenant o prefijo de secretos vacío.");
+  const tenantHash = createHash("sha256").update(tenantId).digest("hex").slice(0, 20);
+  const nombre = [limpio(prefijo), limpio(tenantId), tenantHash, limpio(fuente), limpio(campo)].filter(Boolean).join("-");
+  if (nombre.length > 94) throw new ConfiguracionInvalida(`Nombre de secreto demasiado largo: ${nombre.slice(0, 40)}…`);
   return nombre;
+}
+
+/** Cada rotación usa una referencia nueva: un fallo antes del commit no altera el secreto vigente. */
+export function nombreSecretoRotado(tenantId: string, fuente: string, campo: string): string {
+  return `${nombreSecreto(tenantId, fuente, campo)}-${randomUUID().replace(/-/g, "")}`;
 }

@@ -15,8 +15,11 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { ConexionTuRecibo, FuenteConexion, ModoConexion, ResultadoValidacion } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { ConfiguracionInvalida, leerObligatoria } from "@/lib/env";
-import { escribirSecreto, leerSecreto, nombreSecreto } from "@/lib/keyvault";
+import { ConfiguracionInvalida, leerObligatoria, leerOpcional } from "@/lib/env";
+import { escribirSecreto, leerSecreto, nombreSecretoRotado } from "@/lib/keyvault";
+
+const urlHttps = z.string().trim().url().refine((u) => /^https:\/\//i.test(u), "Tiene que ser https")
+  .transform((u) => u.replace(/\/+$/, ""));
 
 export const FUENTES = ["LICENCIAS_API", "FERIADOS_PANEL"] as const satisfies readonly FuenteConexion[];
 export const MODOS = ["USUARIO_PASSWORD", "SESION", "TOKEN"] as const satisfies readonly ModoConexion[];
@@ -34,12 +37,20 @@ export const CAMPOS_POR_MODO: Record<ModoConexion, readonly string[]> = {
   TOKEN: ["token"],
 };
 
-const urlHttps = z
-  .string()
-  .trim()
-  .url()
-  .refine((u) => /^https:\/\//i.test(u), "Tiene que ser https")
-  .transform((u) => u.replace(/\/+$/, ""));
+function urlProveedor(hostOficial: string, variableOrígenes: string) {
+  return z
+    .string()
+    .trim()
+    .url()
+    .refine((valor) => {
+      const url = new URL(valor);
+      if (url.protocol !== "https:" || url.username || url.password || !/^\/+$/.test(url.pathname) || url.search || url.hash)
+        return false;
+      const autorizados = [`https://${hostOficial}`, ...leerOpcional(variableOrígenes, "").split(",").map((s) => s.trim())];
+      return autorizados.includes(url.origin);
+    }, `Usar el origen HTTPS ${hostOficial} o uno autorizado en ${variableOrígenes}`)
+    .transform((u) => u.replace(/\/+$/, ""));
+}
 
 export const ParametrosLicenciasSchema = z
   .object({
@@ -63,6 +74,13 @@ export const ParametrosFeriadosSchema = z
 
 export type ParametrosLicencias = z.infer<typeof ParametrosLicenciasSchema>;
 export type ParametrosFeriados = z.infer<typeof ParametrosFeriadosSchema>;
+
+const ParametrosLicenciasCambioSchema = ParametrosLicenciasSchema.extend({
+  baseUrl: urlProveedor("api.turecibo.com", "TURECIBO_API_ORIGINS").default("https://api.turecibo.com"),
+});
+const ParametrosFeriadosCambioSchema = ParametrosFeriadosSchema.extend({
+  adminUrl: urlProveedor("admin.turecibo.com", "TURECIBO_ADMIN_ORIGINS").default("https://admin.turecibo.com"),
+});
 
 export function esquemaParametros(fuente: FuenteConexion) {
   return fuente === "LICENCIAS_API" ? ParametrosLicenciasSchema : ParametrosFeriadosSchema;
@@ -128,7 +146,8 @@ export function validarConfiguracion(fuente: FuenteConexion, modo: ModoConexion,
   if (!MODOS_POR_FUENTE[fuente].includes(modo)) {
     throw new ErrorConexion(`El modo ${modo} no aplica a ${fuente}`, 400);
   }
-  const parsed = esquemaParametros(fuente).safeParse(parametros ?? {});
+  const parsed = (fuente === "LICENCIAS_API" ? ParametrosLicenciasCambioSchema : ParametrosFeriadosCambioSchema)
+    .safeParse(parametros ?? {});
   if (!parsed.success) {
     const detalle = parsed.error.issues.map((i) => `${i.path.join(".") || "parametros"}: ${i.message}`).join("; ");
     throw new ErrorConexion(`Parámetros inválidos: ${detalle}`, 400);
@@ -476,7 +495,7 @@ export async function aplicarCambio(
   for (const campo of campos) {
     const nuevo = cambio.secretos[campo];
     if (nuevo) {
-      const nombre = nombreSecreto(tenantId, cambio.fuente, campo);
+      const nombre = nombreSecretoRotado(tenantId, cambio.fuente, campo);
       await escribirSecreto(nombre, nuevo);
       refsVault[campo] = nombre;
       rotados.push(campo);
@@ -527,15 +546,20 @@ export async function registrarValidacion(
   // Un robot que arrancó antes de una rotación no puede pisar la validación de
   // la credencial nueva con el resultado de la vieja.
   if (revision && revision !== revisionDe(fila)) return "revision-vieja";
-  await prisma.conexionTuRecibo.update({
-    where: { id: fila.id },
+  const actualizado = await prisma.conexionTuRecibo.updateMany({
+    where: {
+      id: fila.id,
+      rotadaEn: fila.rotadaEn,
+      actualizadaEn: fila.actualizadaEn,
+      secretos: { equals: referencias(fila).secretos },
+    },
     data: {
       validadaEn: new Date(),
       ultimoResultadoValidacion: prueba.resultado,
       ultimoDetalleValidacion: prueba.detalle.slice(0, 1000),
     },
   });
-  return "registrado";
+  return actualizado.count === 1 ? "registrado" : "revision-vieja";
 }
 
 /**
