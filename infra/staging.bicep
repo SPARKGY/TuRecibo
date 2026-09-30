@@ -46,7 +46,7 @@ param syncTokenSecretName string = 'turecibo-staging-sync-token'
 @description('Name of the independent holiday-ingestion token secret.')
 param feriadosTokenSecretName string = 'turecibo-staging-feriados-token'
 
-@description('Prefix for runtime-managed connection secrets (turecibo-staging-{tenant}-{fuente}-{campo}).')
+@description('Prefix for runtime-managed connection secrets (names include a tenant hash and rotation UUID).')
 #disable-next-line secure-secrets-in-params // Name prefix, not a secret value.
 param keyVaultSecretPrefix string = 'turecibo-staging'
 

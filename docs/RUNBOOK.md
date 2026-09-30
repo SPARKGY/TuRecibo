@@ -369,7 +369,7 @@ renovarla.
    usan `secretosEnv`, que se resuelve con las App Settings que ya leen
    `kv-ignix-prod`. Licencias y robot siguen funcionando igual. La primera
    rotación desde el panel escribe en `kv-turecibo-stg`
-   (`turecibo-staging-{tenant}-{fuente}-{campo}`) y la fila pasa a apuntar
+   (con prefijo `turecibo-staging-` y hash del tenant) y la fila pasa a apuntar
    ahí.
 4. Si hubiera secretos `turecibo-staging-*` de conexión escritos a mano en
    `kv-ignix-prod`, volver a cargarlos desde el panel (los nombres nuevos
