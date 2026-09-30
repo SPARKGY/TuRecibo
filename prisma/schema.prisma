@@ -80,6 +80,9 @@ enum AccionOverride {
 
 /// Referencias a las credenciales de Tu Recibo por tenant.
 ///
+/// **Legado.** La fuente de verdad es `ConexionTuRecibo`; esta tabla solo se
+/// lee cuando un tenant todavía no tiene conexión cargada.
+///
 /// Guarda **nombres de secreto**, nunca valores. El contenido vive en Key Vault
 /// y se resuelve por App Setting. Que el esquema sea por tenant no es
 /// anticipación gratuita: hoy hay un solo juego de credenciales, pero si un
@@ -97,6 +100,64 @@ model CredencialTuRecibo {
   creadaEn      DateTime @default(now())
   actualizadaEn DateTime @updatedAt
 
+  @@index([activa])
+}
+
+/// Con qué parte de Tu Recibo habla una conexión. No es `Fuente`: aquella
+/// distingue datos, esta distingue puertas de entrada con credenciales propias.
+enum FuenteConexion {
+  /// API oficial (`/v2/...`): tipos de licencia y ausencias.
+  LICENCIAS_API
+  /// Panel legacy, navegado por el robot de feriados.
+  FERIADOS_PANEL
+}
+
+/// Cómo se autentica una conexión.
+enum ModoConexion {
+  /// Usuario y contraseña; el módulo o el robot hacen login.
+  USUARIO_PASSWORD
+  /// Cookie de sesión ya establecida (solo panel): el robot salta el login.
+  SESION
+  /// Bearer ya emitido (solo API): se usa sin login.
+  TOKEN
+}
+
+enum ResultadoValidacion {
+  OK
+  FALLIDA
+  /// No se puede validar desde el servidor (login del panel con navegador): lo
+  /// confirma el robot en su próxima corrida.
+  PENDIENTE_ROBOT
+}
+
+/// Conexión paramétrica a Tu Recibo, una por (tenant, fuente).
+///
+/// Reemplaza a `CredencialTuRecibo`, que queda como fallback: si un tenant no
+/// tiene fila acá, se resuelve como antes. **Nunca guarda valores de secreto**:
+/// `secretos` mapea campo → nombre de secreto en Key Vault
+/// (`turecibo-{tenant}-{fuente}-{campo}`), y `secretosEnv` mapea campo → nombre
+/// de variable de entorno para las filas migradas que todavía no se rotaron.
+model ConexionTuRecibo {
+  id                        String               @id @default(cuid())
+  tenantId                  String
+  fuente                    FuenteConexion
+  modo                      ModoConexion
+  /// Validado con zod por fuente (`src/lib/turecibo/conexiones.ts`).
+  parametros                Json                 @default("{}")
+  secretos                  Json                 @default("{}")
+  secretosEnv               Json?
+  activa                    Boolean              @default(true)
+  rotadaEn                  DateTime?
+  /// `x-user-id` / `x-user-email` de CENTRIA de quien rotó.
+  rotadaPorId               String?
+  rotadaPorEmail            String?
+  validadaEn                DateTime?
+  ultimoResultadoValidacion ResultadoValidacion?
+  ultimoDetalleValidacion   String?              @db.Text
+  creadaEn                  DateTime             @default(now())
+  actualizadaEn             DateTime             @updatedAt
+
+  @@unique([tenantId, fuente])
   @@index([activa])
 }
 

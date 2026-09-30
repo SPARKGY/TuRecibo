@@ -14,6 +14,7 @@ import {
   type EstadoFuente,
 } from "@/lib/refresco";
 import { ESTILOS } from "./estilos";
+import PanelConexiones from "./conexiones/PanelConexiones";
 
 /**
  * Página de inicio del módulo, servida por el proxy de CENTRIA en `/m/<codigo>`.
@@ -285,6 +286,8 @@ export default async function Home() {
             </tbody>
           </table>
         </div>
+
+        {identidad?.rol === "ADMIN" && <PanelConexiones />}
 
         <p className="pie">
           Para conectarlos, se habilita la conexión por campo y fila desde CENTRIA. Este módulo no otorga acceso por su

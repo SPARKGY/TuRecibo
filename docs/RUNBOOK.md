@@ -24,8 +24,10 @@ están en los secrets del environment `staging`.
 - `kv-ignix-prod` usa *access policies*. La identidad del sitio tiene solo
   permiso `get` (sin `list`), pero ese permiso alcanza **todos** los secretos
   del vault, incluidos los de producción; no se puede limitar a los tres
-  secretos de este módulo en ese modo. Pendiente: vault de staging separado o
-  RBAC a nivel de secreto. Las credenciales CENTRIA de staging se obtuvieron
+  secretos de este módulo en ese modo. Pendiente: mover también estos
+  secretos de arranque al vault dedicado `kv-turecibo-stg`, que ya aloja los
+  secretos de conexión (ver "Permisos sobre el vault"). La escritura nunca se
+  concede sobre `kv-ignix-prod`. Las credenciales CENTRIA de staging se obtuvieron
   tras el alta del módulo y sustituyeron los placeholders iniciales.
 - En el PostgreSQL compartido, `ignix` y `postgres` conservan `PUBLIC CONNECT`,
   al igual que en el despliegue de Timesheet staging. El rol
@@ -119,8 +121,16 @@ chequeo — significa que el engine cargó y llegó a intentar la conexión.
 npx prisma migrate deploy
 ```
 
-Después, cargar una fila en `CredencialTuRecibo` por tenant. Guarda **nombres**
-de variable, no valores:
+Después, configurar las conexiones de cada tenant desde el panel del módulo
+(ver [Conexiones a Tu Recibo](#conexiones-a-tu-recibo)). La migración
+`1_conexiones_parametricas` ya copia cada fila existente de
+`CredencialTuRecibo` a dos conexiones (`LICENCIAS_API` y `FERIADOS_PANEL`) en
+modo `USUARIO_PASSWORD`, que siguen leyendo las mismas variables de entorno
+hasta la primera rotación.
+
+**Fallback heredado.** Un tenant sin fila en `ConexionTuRecibo` se resuelve
+como antes: una fila en `CredencialTuRecibo` con **nombres** de variable, no
+valores:
 
 | Columna | Ejemplo |
 |---|---|
@@ -130,9 +140,6 @@ de variable, no valores:
 | `usuarioEnv` | `TURECIBO_USER` |
 | `passwordEnv` | `TURECIBO_PASSWORD` |
 | `activa` | `true` |
-
-Para un segundo tenant se agregan variables nuevas al vault
-(`TURECIBO_USER_ACME`, etc.) y se las nombra en su fila.
 
 ### G4 — Registro en CENTRIA
 
@@ -249,6 +256,136 @@ direcciones opuestas ([`CONTRATO.md`](CONTRATO.md#los-dos-secretos)). Si la
 variable está puesta y aun así da 500, probablemente sea una referencia de Key
 Vault sin resolver: llega como texto literal y el módulo la trata como no
 configurada, a propósito.
+
+## Conexiones a Tu Recibo
+
+Cada tenant tiene hasta dos conexiones en `ConexionTuRecibo`, una por fuente:
+
+| Fuente | Quién la usa | Modos |
+|---|---|---|
+| `LICENCIAS_API` | sync de tipos y ausencias (App Service) | `USUARIO_PASSWORD` (login → JWT), `TOKEN` (bearer ya emitido) |
+| `FERIADOS_PANEL` | robot de feriados (GitHub Actions) | `USUARIO_PASSWORD` (login con navegador), `SESION` (cookie PHP inyectada, sin login) |
+
+Parámetros (validados con zod): `baseUrl` para la API; `adminUrl`, `anios`
+(opcional; vacío = actual y siguiente) y `nombreCookieSesion` (default
+`PHPSESSID`) para el panel.
+
+**Secretos.** La base guarda solo nombres. Los valores viven en Key Vault con
+prefijo determinístico `{KEY_VAULT_PREFIJO}-{tenant-normalizado}-{hash-tenant}-{fuente}-{campo}`.
+Cada rotación crea un nombre nuevo con sufijo UUID, y solo después cambia la
+referencia en la base; los nombres antiguos quedan para la retención/limpieza
+operativa. El hash evita colisiones de ids que se normalizan igual. El módulo
+los lee y escribe en runtime con su identidad administrada (`KEY_VAULT_URL`), con caché en memoria de 60 s
+que se invalida al rotar. Las filas migradas guardan `secretosEnv` (nombres de
+variable) hasta la primera rotación desde el panel.
+
+Las URLs nuevas solo aceptan los orígenes oficiales HTTPS. Para un host propio
+del proveedor configurado previamente por el operador, usar
+`TURECIBO_API_ORIGINS` / `TURECIBO_ADMIN_ORIGINS` con una lista de orígenes
+HTTPS separados por coma. No se aceptan rutas, credenciales ni parámetros en
+la URL; el cliente API no sigue redirects. Las URLs heredadas ya guardadas se
+siguen leyendo para no interrumpir licencias/robot hasta su próxima rotación.
+
+### Rotar desde el panel
+
+En la página del módulo (solo rol ADMIN del módulo según `x-module-role`),
+tarjeta de la fuente → **Cambiar credenciales**:
+
+1. Elegir modo y parámetros; cargar los valores nuevos. Los campos vacíos
+   conservan el valor vigente si el modo no cambia.
+2. **Probar** valida sin guardar. **Probar y guardar** vuelve a probar y solo
+   guarda si pasa: escribe una versión nueva de cada secreto en Key Vault y
+   registra `rotadaEn`, `rotadaPor*`, `validadaEn` y el resultado.
+3. Si la prueba falla, no se guarda nada. Se puede tildar "Guardar aunque la
+   prueba falle" (`forzar: true`): queda registrado como `FALLIDA`.
+
+Qué se puede validar desde el servidor:
+
+| Fuente / modo | Prueba |
+|---|---|
+| API / `USUARIO_PASSWORD` o `TOKEN` | login (si aplica) + `GET /v2/licensesUser/types` |
+| Panel / `SESION` | `POST /ajax/licencias/feriados.php` con la cookie; redirect o lista vacía = falla |
+| Panel / `USUARIO_PASSWORD` | no factible (formulario en iframe + SSO): queda `PENDIENTE_ROBOT` hasta la próxima corrida del robot |
+
+**Probar conexión** en la tarjeta prueba la configuración vigente y registra
+el resultado. Las rutas son `GET|PUT /api/conexiones` y
+`POST /api/conexiones/probar`; ninguna devuelve valores de secreto.
+
+### Robot y conexión
+
+El robot pide su configuración a `GET /api/robot/conexion?tenantId=` con
+`x-feriados-token` (el mismo `FERIADOS_TOKEN` de la ingesta). Recibe modo,
+parámetros y el secreto que corresponda, y al terminar informa con
+`POST /api/robot/conexion` si la credencial/sesión sirvió (actualiza
+`ultimoResultadoValidacion`). Solo las fallas de acceso (login rechazado,
+vuelta a `/s/login`, año vacío) marcan la conexión como `FALLIDA`; un error de
+red no. Un reporte con una `revision` anterior a la última rotación se ignora.
+
+**Fallback.** Si el módulo responde 404 (tenant sin conexión ni legado, o un
+módulo sin esta ruta), no responde, o devuelve 5xx, el robot usa
+`TURECIBO_USER`/`TURECIBO_PASSWORD`/`TURECIBO_ADMIN_URL` del entorno como
+antes. Un 401/403 aborta: el token está mal. En el workflow, los secrets
+`TURECIBO_USER`/`TURECIBO_PASSWORD` del environment `staging` pasan a ser
+**opcionales** y solo sirven para ese fallback; se pueden borrar una vez que
+la conexión `FERIADOS_PANEL` esté validada por el robot.
+
+### Modo SESION: cómo obtener la cookie
+
+Entrar al panel con un navegador, abrir `/gestion.licencias` (dispara el SSO),
+y copiar el valor de la cookie `PHPSESSID` del dominio del panel desde las
+herramientas de desarrollo. Cargarlo en la tarjeta del panel con modo
+**Sesión**. La sesión PHP vence: cuando el robot reporte `FALLIDA`, hay que
+renovarla.
+
+### Permisos sobre el vault
+
+- **Producción** (`infra/main.bicep`, vault propio con RBAC): la identidad del
+  App Service tiene **Key Vault Secrets Officer** (lee y escribe secretos;
+  no gestiona claves ni certificados ni el vault).
+- **Staging** (`infra/staging.bicep`): los secretos de conexión viven en un
+  **vault dedicado** `kv-turecibo-stg` (parámetro `connectionsVaultName`), con
+  RBAC, soft delete de 90 días y purge protection, que crea la misma
+  plantilla. La identidad del sitio tiene **Key Vault Secrets Officer solo
+  sobre ese vault**, y `KEY_VAULT_URL` apunta a él. Sobre el vault compartido
+  `kv-ignix-prod` (*access policies*) la plantilla **no concede nada**: la
+  identidad conserva únicamente el `get` preexistente para las referencias de
+  App Settings de arranque (`DATABASE_URL`, tokens, `TURECIBO_USER/PASSWORD`).
+  Staging no puede escribir secretos de producción.
+
+  Por qué no una access policy `set` en `kv-ignix-prod`: no se puede limitar
+  por secreto, así que daría a staging escritura sobre todos los secretos de
+  producción. Un prefijo de nombre no alcanza como separación.
+
+#### Alta y migración del vault de staging
+
+1. Desplegar `infra/staging.bicep` (crea `kv-turecibo-stg` y la asignación de
+   rol). Para cargar secretos a mano, pasar
+   `connectionsVaultAdminObjectIds=["<objectId de usuario o grupo>"]`; si no,
+   solo la app puede escribir. Verificar antes con `az deployment group
+   what-if`: `kv-ignix-prod` debe figurar como `Ignore` (sin cambios).
+2. Esperar la propagación de RBAC (hasta ~5 min) antes de rotar desde el panel;
+   mientras tanto la escritura devuelve 502 y no se guarda nada.
+3. No hay nada que copiar: las filas migradas desde `CredencialTuRecibo`
+   usan `secretosEnv`, que se resuelve con las App Settings que ya leen
+   `kv-ignix-prod`. Licencias y robot siguen funcionando igual. La primera
+   rotación desde el panel escribe en `kv-turecibo-stg`
+   (con prefijo `turecibo-staging-` y hash del tenant) y la fila pasa a apuntar
+   ahí.
+4. Si hubiera secretos `turecibo-staging-*` de conexión escritos a mano en
+   `kv-ignix-prod`, volver a cargarlos desde el panel (los nombres nuevos
+   incluyen hash y UUID) y borrarlos del
+   vault compartido con su responsable.
+5. Comprobar que la identidad no tiene escritura en el vault compartido:
+   `az keyvault show -n kv-ignix-prod --query "properties.accessPolicies[?objectId=='<principalId>'].permissions.secrets"`
+   debe devolver solo `["get"]`. Si alguna vez se aplicó una versión
+   anterior de esta rama con `set`, dejarla en `get` con
+   `az keyvault set-policy -n kv-ignix-prod --object-id <principalId> --secret-permissions get`.
+
+Rollback: volver `KEY_VAULT_URL` al valor anterior no es necesario ni
+recomendable. Si el vault dedicado no está disponible, la rotación desde el
+panel falla sin guardar y las filas con `secretosEnv` siguen resolviendo por
+App Settings. Purge protection impide borrar el vault de forma definitiva
+durante la retención: es intencional.
 
 ## Rotar un secreto
 

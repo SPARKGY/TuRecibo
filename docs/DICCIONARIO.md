@@ -129,10 +129,12 @@ de los años que nadie pidió.
 
 | Tabla | Para qué |
 |---|---|
-| `CredencialTuRecibo` | Por tenant: URLs y **nombres** de las variables con usuario y clave. Nunca los valores |
+| `ConexionTuRecibo` | Por (tenant, fuente): modo, parámetros y **nombres** de secretos en Key Vault. Metadata de rotación y validación. Nunca los valores |
+| `CredencialTuRecibo` | Legado/fallback: URLs y **nombres** de las variables con usuario y clave. Nunca los valores |
 | `CorridaSync` | Una fila por corrida: fuente, estado, conteos, error |
 | `FeriadoOverride` | Las correcciones manuales, con motivo y autor |
 | `SelloMaestro` | Cuándo se verificó por última vez cada maestro |
 
-`CredencialTuRecibo` guarda nombres de variable y no valores a propósito: así un
-volcado de la base a staging no arrastra credenciales de producción.
+Las dos tablas de credenciales guardan nombres (de secreto o de variable) y no
+valores a propósito: así un volcado de la base a staging no arrastra
+credenciales de producción.
