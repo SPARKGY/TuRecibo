@@ -22,7 +22,7 @@ export const ESTILOS = `
   --bd: #a01818;
   --border: #d5d5d5;
   --border-stronger: #8a8a8a;
-  --text-sugerencia: #767676;
+  --text-sugerencia: #6b6b6b;
   --radius: 3px;
 
   min-height: 100vh;
@@ -82,7 +82,7 @@ export const ESTILOS = `
 
 .ch .tarjetas {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
   gap: 10px;
 }
 .ch .tarjeta {

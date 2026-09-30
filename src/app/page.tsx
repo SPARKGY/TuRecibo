@@ -125,7 +125,9 @@ function UltimaOk({ f, ahora }: { f: EstadoFuente; ahora: Date }) {
       </div>
     );
   }
-  if (!f.consultaOk) return null;
+  if (!f.consultaUltimaOk) {
+    return <div className="ultima-ok nunca">Sin datos: no se pudo consultar la última corrida OK.</div>;
+  }
   return <div className="ultima-ok nunca">No hay ninguna corrida OK registrada.</div>;
 }
 

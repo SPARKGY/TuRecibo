@@ -100,7 +100,13 @@ describe("leerEstadoRefresco", () => {
     prismaMock.corridaSync.findFirst.mockRejectedValue(new Error("db caída"));
     prismaMock.feriado.count.mockRejectedValue(new Error("db caída"));
     const [feriados, ausencias] = (await leerEstadoRefresco("t1")) as [EstadoFuente, EstadoFuente];
-    expect(feriados).toMatchObject({ ultima: null, ultimaOk: null, activas: null, consultaOk: false });
+    expect(feriados).toMatchObject({
+      ultima: null,
+      ultimaOk: null,
+      consultaUltimaOk: true,
+      activas: null,
+      consultaOk: false,
+    });
     expect(ausencias.activas).toBe(300);
     expect(ausencias.sello?.revision).toBe(4);
   });
@@ -110,5 +116,28 @@ describe("leerEstadoRefresco", () => {
     prismaMock.selloMaestro.findUnique.mockResolvedValue(null);
     const feriados = (await leerEstadoRefresco("t1"))[0]!;
     expect(feriados).toMatchObject({ ultima: null, sello: null, consultaOk: true });
+  });
+
+  it("preserva el estado de la búsqueda de la última OK aunque fallen otras consultas", async () => {
+    prismaMock.corridaSync.findFirst.mockImplementation(async (args: { where: { estado?: string } }) =>
+      args.where.estado === "OK" ? null : corrida("FALLIDA"),
+    );
+    prismaMock.feriado.count.mockRejectedValue(new Error("db caída"));
+    const feriados = (await leerEstadoRefresco("t1"))[0]!;
+    expect(feriados).toMatchObject({
+      ultima: { estado: "FALLIDA" },
+      ultimaOk: null,
+      consultaUltimaOk: true,
+      activas: null,
+      consultaOk: false,
+    });
+  });
+
+  it("indica si falló específicamente la búsqueda de la última OK", async () => {
+    prismaMock.corridaSync.findFirst.mockImplementation(async (args: { where: { estado?: string } }) =>
+      args.where.estado === "OK" ? Promise.reject(new Error("db caída")) : corrida("FALLIDA"),
+    );
+    const feriados = (await leerEstadoRefresco("t1"))[0]!;
+    expect(feriados).toMatchObject({ ultimaOk: null, consultaUltimaOk: false, consultaOk: false });
   });
 });

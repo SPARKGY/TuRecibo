@@ -52,6 +52,8 @@ export type EstadoFuente = FuenteRefresco & {
   ultima: CorridaResumen | null;
   /** Solo se busca si la última no fue OK. */
   ultimaOk: CorridaResumen | null;
+  /** Si se pudo resolver la consulta de la última corrida OK cuando fue necesaria. */
+  consultaUltimaOk: boolean;
   sello: SelloResumen | null;
   activas: number | null;
   /** `false` si alguna consulta de esta fuente falló. */
@@ -113,6 +115,7 @@ async function leerFuente(tenantId: string, f: FuenteRefresco): Promise<EstadoFu
   ]);
 
   let ultimaOk: Intento<CorridaResumen | null> = { ok: true, valor: null };
+  let consultaUltimaOk = true;
   if (ultima.ok && ultima.valor && ultima.valor.estado !== "OK") {
     ultimaOk = await intentar(() =>
       prisma.corridaSync.findFirst({
@@ -121,15 +124,17 @@ async function leerFuente(tenantId: string, f: FuenteRefresco): Promise<EstadoFu
         select: SELECT_CORRIDA,
       }),
     );
+    consultaUltimaOk = ultimaOk.ok;
   }
 
   return {
     ...f,
     ultima: ultima.ok ? ultima.valor : null,
     ultimaOk: ultimaOk.ok ? ultimaOk.valor : null,
+    consultaUltimaOk,
     sello: sello.ok ? sello.valor : null,
     activas: activas.ok ? activas.valor : null,
-    consultaOk: ultima.ok && ultimaOk.ok && sello.ok && activas.ok,
+    consultaOk: ultima.ok && consultaUltimaOk && sello.ok && activas.ok,
   };
 }
 
